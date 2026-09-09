@@ -1,7 +1,16 @@
-# Root workspace. Only `core` is a member — it builds natively (`cargo build`).
-# `crates/web` is a SEPARATE workspace (it has its own [workspace]) because it's
-# wasm-only (Leptos): keeping it out of here means `cargo build`/`cargo test` at
-# the root won't try to host-compile wasm code and fail. trunk builds web. See DESIGN.md §7.
+# Multi-agent AI trading system on Alpaca. Native binary (no wasm now).
+#   core   - pure deterministic indicators/signals, used as agent "tools"
+#   agents - Alpaca client, Claude LLM client, the agents + orchestrator, audit log
+#   app    - CLI entrypoint that runs the pipeline over a watchlist
 [workspace]
 resolver = "2"
-members = ["crates/core"]
+members = ["crates/core", "crates/agents", "crates/app"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+alpaca-core = { path = "crates/core" }
+alpaca-agents = { path = "crates/agents" }

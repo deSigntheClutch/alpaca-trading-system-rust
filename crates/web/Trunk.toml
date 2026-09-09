@@ -1,3 +1,0 @@
-# trunk dev server. Run `trunk serve --open` from crates/web for live-reload.
-[serve]
-port = 8080
