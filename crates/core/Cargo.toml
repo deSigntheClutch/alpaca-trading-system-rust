@@ -1,0 +1,9 @@
+[package]
+name = "alpaca-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+treemap = "0.3.2"
+# Native-only. Alpaca fetch deps (reqwest/serde) land here when we wire real data.
+# Kept out of the wasm `web` crate on purpose.

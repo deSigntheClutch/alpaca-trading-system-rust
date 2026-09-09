@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alpaca 每日行情摘要</title>
+    <!-- trunk finds this crate and builds it to wasm; the app mounts into <body>. -->
+    <link data-trunk rel="rust" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: -apple-system, "SF Pro", Inter, system-ui, sans-serif;
+        background: #0b0f14;
+        color: #e6edf3;
+        padding: 20px 24px;
+      }
+      .title { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+      .slider { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+      .slider input[type="range"] { width: 260px; }
+      .tf-label { font-variant-numeric: tabular-nums; font-weight: 700; min-width: 32px; }
+
+      .zoom-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+      .zoom-bar input[type="range"] { width: 200px; }
+      .viewport {
+        overflow: auto; /* scroll/pan when zoomed in */
+        max-height: 78vh;
+        border: 1px solid #263140;
+        border-radius: 8px;
+        background: #0b0f14;
+      }
+      .zoom-space { position: relative; } /* reserves the scaled size for scrolling */
+
+      /* .heatmap size is set inline (the treemap canvas). */
+      .sector-box {
+        position: absolute; /* geometry set inline */
+        border: 1px solid #263140;
+        border-radius: 6px;
+        background: #0d1218;
+        pointer-events: none;
+      }
+      .sector-label {
+        position: absolute; /* geometry set inline */
+        font-size: 11px;
+        color: #cbd5e1;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .tile {
+        position: absolute; /* left/top/width/height set inline (treemap) */
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border-radius: 4px;
+        color: #fff;
+        overflow: hidden;
+        text-shadow: 0 1px 2px #0008;
+        cursor: default;
+        transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+      }
+      .tile:hover {
+        transform: scale(1.08);
+        filter: brightness(1.35) saturate(1.15);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6), 0 0 16px rgba(120, 200, 255, 0.4);
+        z-index: 10; /* rise above neighbors */
+      }
+      .tile .sym { font-weight: 700; font-size: 13px; }
+      .tile .pct { font-size: 11px; font-variant-numeric: tabular-nums; opacity: 0.92; }
+    </style>
+  </head>
+  <body></body>
+</html>

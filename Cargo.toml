@@ -1,0 +1,7 @@
+# Root workspace. Only `core` is a member — it builds natively (`cargo build`).
+# `crates/web` is a SEPARATE workspace (it has its own [workspace]) because it's
+# wasm-only (Leptos): keeping it out of here means `cargo build`/`cargo test` at
+# the root won't try to host-compile wasm code and fail. trunk builds web. See DESIGN.md §7.
+[workspace]
+resolver = "2"
+members = ["crates/core"]
