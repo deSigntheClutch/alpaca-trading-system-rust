@@ -1,24 +1,114 @@
-//! Crypto streaming ingester. One owner task reads the WS, fans ticks out to
-//! consumers (broadcast) and persists to the Store. tokio patterns land in Phase 2:
+//! Crypto streaming ingester — the tokio surface of the system.
 //!
-//!   2.1 connect + read one symbol   2.2 select! + CancellationToken shutdown
-//!   2.3 broadcast fan-out           2.4 exp-backoff reconnect + heartbeat timeout
-//!   2.5 bounded channels / Lagged backpressure
-#![allow(dead_code)] // Phase 0: fields wired but unused until Phase 2.
+//! One owner task holds the websocket and fans every tick out to N consumers over a
+//! `broadcast` channel (the pipeline is one such consumer). The stream *ending* is a
+//! normal event (`MarketStream` contract), so `run` reconnects with exponential
+//! backoff. Shutdown = abort the task (see `main`): a read loop has no state to
+//! corrupt, so aborting mid-`await` just drops the socket.
 
-use crate::traits::{MarketStream, Store};
+use std::time::Duration;
 
-/// Owns the market stream and the store. Generic over both ports (no infra coupling).
-pub struct Ingester<M: MarketStream, S: Store> {
+use futures::stream::StreamExt;
+use tokio::sync::broadcast;
+
+use crate::domain::types::{Symbol, Tick};
+use crate::traits::MarketStream;
+
+const BACKOFF_START: Duration = Duration::from_secs(1);
+const BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// Owns the market stream and a broadcast sender. Generic over the port (no infra
+/// coupling), so it's testable with a fake stream and zero network.
+pub struct Ingester<M: MarketStream> {
     market: M,
-    store: S,
+    tx: broadcast::Sender<Tick>,
 }
 
-impl<M: MarketStream, S: Store> Ingester<M, S> {
-    pub fn new(market: M, store: S) -> Self {
-        Self { market, store }
+impl<M: MarketStream> Ingester<M> {
+    /// `capacity` bounds the per-consumer backlog; a slow consumer that overflows it
+    /// gets a `Lagged` error and skips ahead rather than stalling the owner task.
+    pub fn new(market: M, capacity: usize) -> Self {
+        let (tx, _rx) = broadcast::channel(capacity);
+        Self { market, tx }
     }
 
-    // Phase 2.2+: async fn run(&self, symbols, shutdown: CancellationToken)
-    // owner task -> broadcast fan-out -> reconnect. See module docs.
+    /// Subscribe a new consumer. Call before `run` to guarantee no ticks are missed.
+    pub fn subscribe(&self) -> broadcast::Receiver<Tick> {
+        self.tx.subscribe()
+    }
+
+    /// Connect → fan out ticks → reconnect forever. Returns only if aborted.
+    pub async fn run(&self, symbols: &[Symbol]) {
+        let mut backoff = BACKOFF_START;
+        loop {
+            match self.market.subscribe(symbols).await {
+                Ok(mut stream) => {
+                    backoff = BACKOFF_START; // healthy connect resets the backoff
+                    tracing::info!(?symbols, "crypto stream connected");
+                    while let Some(item) = stream.next().await {
+                        match item {
+                            // send() errs only when there are no receivers — harmless.
+                            Ok(tick) => {
+                                let _ = self.tx.send(tick);
+                            }
+                            Err(e) => tracing::warn!(error = %e, "tick error"),
+                        }
+                    }
+                    tracing::warn!("crypto stream ended; reconnecting");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, backoff = ?backoff, "subscribe failed; backing off");
+                }
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(BACKOFF_MAX);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::error::MarketError;
+    use async_trait::async_trait;
+    use futures::stream::BoxStream;
+    use std::sync::Arc;
+
+    fn tick(price: f64) -> Tick {
+        Tick {
+            symbol: Symbol::from("BTC/USD"),
+            ts: 0,
+            price,
+            size: 0.0,
+        }
+    }
+
+    /// Yields three ticks then ends (which drives a reconnect — fine for the test,
+    /// we read exactly three and abort).
+    struct FakeMarket;
+
+    #[async_trait]
+    impl MarketStream for FakeMarket {
+        async fn subscribe(
+            &self,
+            _symbols: &[Symbol],
+        ) -> Result<BoxStream<'static, Result<Tick, MarketError>>, MarketError> {
+            let items = vec![Ok(tick(1.0)), Ok(tick(2.0)), Ok(tick(3.0))];
+            Ok(futures::stream::iter(items).boxed())
+        }
+    }
+
+    #[tokio::test]
+    async fn fans_out_ticks_to_a_subscriber() {
+        let ing = Arc::new(Ingester::new(FakeMarket, 16));
+        let mut rx = ing.subscribe(); // subscribe BEFORE run so nothing is missed
+        let bg = ing.clone();
+        let handle = tokio::spawn(async move { bg.run(&[Symbol::from("BTC/USD")]).await });
+
+        for expected in [1.0, 2.0, 3.0] {
+            let got = rx.recv().await.expect("tick");
+            assert_eq!(got.price, expected);
+        }
+        handle.abort();
+    }
 }

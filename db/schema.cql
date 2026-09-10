@@ -1,4 +1,4 @@
--- Apply: docker exec -i alpaca-scylla cqlsh < migrations/001_init.cql
+-- Apply: docker exec -i alpaca-scylla cqlsh < db/schema.cql
 -- Dev: SimpleStrategy RF=1. Prod bumps RF and uses NetworkTopologyStrategy.
 
 CREATE KEYSPACE IF NOT EXISTS trading

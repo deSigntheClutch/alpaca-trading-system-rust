@@ -1,12 +1,17 @@
 //! Config: secrets from env (`.env`), strategies from a TOML file. The live barrier
 //! is fail-closed — a non-paper base aborts the load unless `ALLOW_LIVE=1`.
 
+use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use super::error::ConfigError;
 
 const DEFAULT_PAPER_BASE: &str = "https://paper-api.alpaca.markets";
+const DEFAULT_DATA_BASE: &str = "https://data.alpaca.markets";
 const DEFAULT_CRYPTO_WS: &str = "wss://stream.data.alpaca.markets/v1beta3/crypto/us";
+/// Per-order notional ceiling if `MAX_NOTIONAL` is unset. Small on purpose — this is
+/// the last clamp before a real (paper) order, so the safe default is tiny.
+const DEFAULT_MAX_NOTIONAL: &str = "100";
 
 /// How often a strategy runs. Crypto = `Stream` (resident); stock = `Cron` (later).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -40,8 +45,12 @@ pub struct Config {
     pub anthropic_key: String,
     /// Trading REST base. Paper by default.
     pub alpaca_trade_base: String,
+    /// Market-data REST base (historical bars). Not the trading base.
+    pub alpaca_data_base: String,
     /// Crypto market-data websocket endpoint.
     pub alpaca_data_ws: String,
+    /// Per-order notional ceiling enforced by the guards.
+    pub max_notional: Decimal,
     /// True only when a non-paper base was explicitly allowed.
     pub allow_live: bool,
     pub strategies: Vec<Strategy>,
@@ -72,21 +81,29 @@ impl Config {
             return Err(ConfigError::LiveBlocked(base));
         }
 
-        let data_ws = {
-            let v = env("ALPACA_DATA_WS");
+        let or_default = |k: &str, default: &str| {
+            let v = env(k);
             if v.is_empty() {
-                DEFAULT_CRYPTO_WS.to_string()
+                default.to_string()
             } else {
                 v
             }
         };
+        let data_ws = or_default("ALPACA_DATA_WS", DEFAULT_CRYPTO_WS);
+        let data_base = or_default("ALPACA_DATA_BASE", DEFAULT_DATA_BASE);
+
+        let max_notional = or_default("MAX_NOTIONAL", DEFAULT_MAX_NOTIONAL)
+            .parse::<Decimal>()
+            .map_err(|e| ConfigError::Parse(format!("MAX_NOTIONAL: {e}")))?;
 
         Ok(Self {
             alpaca_key: env("ALPACA_KEY"),
             alpaca_secret: env("ALPACA_SECRET"),
             anthropic_key: env("ANTHROPIC_API_KEY"),
             alpaca_trade_base: base,
+            alpaca_data_base: data_base,
             alpaca_data_ws: data_ws,
+            max_notional,
             allow_live,
             strategies: parsed.strategies,
         })

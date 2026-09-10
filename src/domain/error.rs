@@ -38,6 +38,17 @@ pub enum LlmError {
     BadResponse(String),
 }
 
+/// Broker (order placement / account) failures.
+#[derive(Debug, Error)]
+pub enum BrokerError {
+    #[error("request failed: {0}")]
+    Request(String),
+    #[error("broker rejected order: {0}")]
+    Rejected(String),
+    #[error("decode failed: {0}")]
+    Decode(String),
+}
+
 /// Config load / validation failures.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -59,6 +70,8 @@ pub enum PipelineError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Llm(#[from] LlmError),
+    #[error(transparent)]
+    Broker(#[from] BrokerError),
     #[error("decision parse failed: {0}")]
     Decision(String),
 }
