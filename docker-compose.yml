@@ -1,0 +1,21 @@
+# Local single-node ScyllaDB for dev.
+#   docker compose up -d scylla
+#   docker exec -i alpaca-scylla cqlsh < db/schema.cql
+services:
+  scylla:
+    image: scylladb/scylla:5.4
+    container_name: alpaca-scylla
+    # Dev flags: keep it small and forgiving on a laptop.
+    command: --smp 1 --memory 1G --overprovisioned 1 --developer-mode 1
+    ports:
+      - "9042:9042"
+    volumes:
+      - scylla-data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+
+volumes:
+  scylla-data:

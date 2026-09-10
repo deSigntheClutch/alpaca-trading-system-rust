@@ -1,0 +1,7 @@
+# Trading strategies. Crypto first (streaming); stock (cron) is the next milestone.
+# Symbols use Alpaca crypto notation (BASE/QUOTE). Secrets live in .env, not here.
+
+[[strategies]]
+id = "crypto-momentum"
+symbols = ["BTC/USD", "ETH/USD"]
+tempo = "stream"

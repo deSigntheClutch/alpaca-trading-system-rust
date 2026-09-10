@@ -1,16 +1,26 @@
-# Multi-agent AI trading system on Alpaca. Native binary (no wasm now).
-#   core   - pure deterministic indicators/signals, used as agent "tools"
-#   agents - Alpaca client, Claude LLM client, the agents + orchestrator, audit log
-#   app    - CLI entrypoint that runs the pipeline over a watchlist
-[workspace]
-resolver = "2"
-members = ["crates/core", "crates/agents", "crates/app"]
+[package]
+name = "alpaca-trading-system"
+version = "0.1.0"
+edition = "2021"
 
-[workspace.dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# One package: `src/lib.rs` (modules, layered) + `src/main.rs` (the binary).
+[[bin]]
+name = "crypto-agent"
+path = "src/main.rs"
+
+[dependencies]
+# runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+futures = "0.3"
+async-trait = "0.1"
+# http / serde
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
+# money / errors / obs
+rust_decimal = { version = "1", features = ["serde"] }
+thiserror = "1"
 anyhow = "1"
-alpaca-core = { path = "crates/core" }
-alpaca-agents = { path = "crates/agents" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

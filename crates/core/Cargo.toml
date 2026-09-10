@@ -1,9 +1,0 @@
-[package]
-name = "alpaca-core"
-version = "0.1.0"
-edition = "2021"
-
-# Pure numeric logic only (indicators + composite signal). No network, no deps.
-# These functions are called by the agents as deterministic "tools" so the LLM
-# never does arithmetic itself.
-[dependencies]
