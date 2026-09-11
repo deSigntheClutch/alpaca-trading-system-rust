@@ -78,8 +78,18 @@ impl<T: BarSource + ?Sized> BarSource for &T {
 
 #[async_trait]
 impl<T: Store + ?Sized> Store for &T {
-    async fn append_event(&self, strategy_id: &str, symbol: &Symbol, ts: i64, step: &str, decision_id: &str, payload: &str) -> Result<(), StoreError> {
-        (**self).append_event(strategy_id, symbol, ts, step, decision_id, payload).await
+    async fn append_event(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+        ts: i64,
+        step: &str,
+        decision_id: &str,
+        payload: &str,
+    ) -> Result<(), StoreError> {
+        (**self)
+            .append_event(strategy_id, symbol, ts, step, decision_id, payload)
+            .await
     }
     async fn write_bars(&self, bars: &[Bar]) -> Result<(), StoreError> {
         (**self).write_bars(bars).await

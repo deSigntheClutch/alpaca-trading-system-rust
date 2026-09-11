@@ -55,15 +55,6 @@ pub struct Tick {
     pub size: f64,
 }
 
-/// Best bid/ask snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Quote {
-    pub symbol: Symbol,
-    pub ts: i64,
-    pub bid: f64,
-    pub ask: f64,
-}
-
 /// Trade direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

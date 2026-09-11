@@ -9,6 +9,6 @@
 //! a second binary ever demands it — mechanical, not a redesign.
 
 pub mod domain; // types, errors, indicator math, config
-pub mod traits; // ports — the seams infra implements and engine consumes
+pub mod engine;
 pub mod infra; // port implementations (alpaca / store / llm)
-pub mod engine; // orchestration over the ports (ingest / pipeline / guards)
+pub mod traits; // ports — the seams infra implements and engine consumes // orchestration over the ports (ingest / pipeline / guards)

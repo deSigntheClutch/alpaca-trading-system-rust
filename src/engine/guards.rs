@@ -83,7 +83,9 @@ mod tests {
     use rust_decimal_macros::dec;
 
     fn cfg() -> GuardConfig {
-        GuardConfig { max_notional: dec!(100) }
+        GuardConfig {
+            max_notional: dec!(100),
+        }
     }
 
     fn decision(action: Action, qty: Decimal) -> Decision {
@@ -99,14 +101,26 @@ mod tests {
     #[test]
     fn buy_over_notional_is_clamped() {
         // qty 10 @ price 50 = 500 notional, cap 100 → qty 2.
-        let d = apply(decision(Action::Buy, dec!(10)), dec!(0), dec!(1_000_000), dec!(50), &cfg());
+        let d = apply(
+            decision(Action::Buy, dec!(10)),
+            dec!(0),
+            dec!(1_000_000),
+            dec!(50),
+            &cfg(),
+        );
         assert_eq!(d.action, Action::Buy);
         assert_eq!(d.qty, dec!(2));
     }
 
     #[test]
     fn buy_with_no_buying_power_becomes_hold() {
-        let d = apply(decision(Action::Buy, dec!(1)), dec!(0), dec!(0), dec!(50), &cfg());
+        let d = apply(
+            decision(Action::Buy, dec!(1)),
+            dec!(0),
+            dec!(0),
+            dec!(50),
+            &cfg(),
+        );
         assert_eq!(d.action, Action::Hold);
         assert_eq!(d.qty, dec!(0));
     }
@@ -114,20 +128,52 @@ mod tests {
     #[test]
     fn sell_is_bounded_by_position() {
         // want to sell 5, only hold 1.5 → clamp to 1.5.
-        let d = apply(decision(Action::Sell, dec!(5)), dec!(1.5), dec!(0), dec!(50), &cfg());
+        let d = apply(
+            decision(Action::Sell, dec!(5)),
+            dec!(1.5),
+            dec!(0),
+            dec!(50),
+            &cfg(),
+        );
         assert_eq!(d.action, Action::Sell);
         assert_eq!(d.qty, dec!(1.5));
     }
 
     #[test]
     fn sell_with_no_position_becomes_hold() {
-        let d = apply(decision(Action::Sell, dec!(5)), dec!(0), dec!(0), dec!(50), &cfg());
+        let d = apply(
+            decision(Action::Sell, dec!(5)),
+            dec!(0),
+            dec!(0),
+            dec!(50),
+            &cfg(),
+        );
         assert_eq!(d.action, Action::Hold);
     }
 
     #[test]
     fn hold_and_nonpositive_qty_pass_through_as_hold() {
-        assert_eq!(apply(decision(Action::Hold, dec!(0)), dec!(0), dec!(0), dec!(50), &cfg()).action, Action::Hold);
-        assert_eq!(apply(decision(Action::Buy, dec!(0)), dec!(0), dec!(100), dec!(50), &cfg()).action, Action::Hold);
+        assert_eq!(
+            apply(
+                decision(Action::Hold, dec!(0)),
+                dec!(0),
+                dec!(0),
+                dec!(50),
+                &cfg()
+            )
+            .action,
+            Action::Hold
+        );
+        assert_eq!(
+            apply(
+                decision(Action::Buy, dec!(0)),
+                dec!(0),
+                dec!(100),
+                dec!(50),
+                &cfg()
+            )
+            .action,
+            Action::Hold
+        );
     }
 }

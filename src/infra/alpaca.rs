@@ -199,7 +199,10 @@ impl Broker for AlpacaRest {
             .map(|p| {
                 Ok(Position {
                     symbol: Symbol::from(p.symbol),
-                    qty: p.qty.parse().map_err(|e| BrokerError::Decode(format!("qty: {e}")))?,
+                    qty: p
+                        .qty
+                        .parse()
+                        .map_err(|e| BrokerError::Decode(format!("qty: {e}")))?,
                     market_value: p
                         .market_value
                         .parse()
@@ -285,7 +288,11 @@ pub struct CryptoWs {
 
 impl CryptoWs {
     pub fn new(key: String, secret: String, ws_url: String) -> Self {
-        Self { key, secret, ws_url }
+        Self {
+            key,
+            secret,
+            ws_url,
+        }
     }
 }
 
@@ -461,9 +468,21 @@ mod tests {
     #[test]
     fn trade_base_never_doubles_v2() {
         let want = "https://paper-api.alpaca.markets";
-        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets"), want);
-        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets/"), want);
-        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets/v2"), want);
-        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets/v2/"), want);
+        assert_eq!(
+            normalize_trade_base("https://paper-api.alpaca.markets"),
+            want
+        );
+        assert_eq!(
+            normalize_trade_base("https://paper-api.alpaca.markets/"),
+            want
+        );
+        assert_eq!(
+            normalize_trade_base("https://paper-api.alpaca.markets/v2"),
+            want
+        );
+        assert_eq!(
+            normalize_trade_base("https://paper-api.alpaca.markets/v2/"),
+            want
+        );
     }
 }

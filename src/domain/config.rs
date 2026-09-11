@@ -146,7 +146,10 @@ mod tests {
         std::env::remove_var("ALLOW_LIVE");
         let cfg = Config::load(&path).unwrap();
         assert_eq!(cfg.strategies.len(), 2);
-        assert_eq!(cfg.strategy("crypto-momentum").unwrap().tempo, Tempo::Stream);
+        assert_eq!(
+            cfg.strategy("crypto-momentum").unwrap().tempo,
+            Tempo::Stream
+        );
         // omitted tempo defaults to Stream
         assert_eq!(cfg.strategy("stock-daily").unwrap().tempo, Tempo::Stream);
         assert!(cfg.alpaca_trade_base.contains("paper"));

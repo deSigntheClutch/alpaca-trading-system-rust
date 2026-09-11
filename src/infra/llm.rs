@@ -13,12 +13,10 @@ use crate::domain::error::LlmError;
 use crate::traits::LlmClient;
 
 pub const SONNET: &str = "claude-sonnet-5";
-pub const HAIKU: &str = "claude-haiku-4-5-20251001";
 
-/// Bedrock inference-profile IDs (region us-east-1). Use the `us.`-prefixed *profile*
+/// Bedrock inference-profile ID (region us-east-1). Use the `us.`-prefixed *profile*
 /// ID, not the bare model ID — newer Claude models reject on-demand invocation by bare
 /// ID ("...isn't supported. Retry with an inference profile"). Override via `BEDROCK_MODEL`.
-pub const BEDROCK_HAIKU: &str = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
 pub const BEDROCK_SONNET: &str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
 const API_BASE: &str = "https://api.anthropic.com";

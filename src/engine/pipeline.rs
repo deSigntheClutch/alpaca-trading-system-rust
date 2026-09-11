@@ -1,10 +1,7 @@
 //! Agent pipeline: bars → signal (pure) → analyst (LLM) → decision (LLM) → guards →
-//! execute → persist every step (WAL). Generic over the four ports, so the whole
-//! flow is testable with fakes — no network, no database, no live orders.
-//!
-//! Write ordering is load-bearing: the `order_intent` row is persisted BEFORE the
-//! broker call and `order_result` AFTER — a crash between the two leaves an intent
-//! with no result (recoverable), never an order with no record.
+//! execute → persist every step (WAL — see `execute` for the write ordering). Generic
+//! over the four ports, so the whole flow is testable with fakes — no network, no
+//! database, no live orders.
 
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -29,8 +26,10 @@ pub struct PipelineConfig {
     /// How many daily bars to pull for the signal window (needs ≥20).
     pub bar_window: usize,
     pub max_notional: Decimal,
-    /// Verification only: when set, skip the signal + LLM and force this side's order
-    /// (still clamped by the guards to `max_notional`). `None` = normal signal-driven flow.
+    /// Verification only (`FORCE_SIDE=buy|sell`): skip the signal + LLM and force this
+    /// side's order, so the execute + Alpaca paper path can be confirmed end-to-end.
+    /// Still clamped by the guards to `max_notional` (set `MAX_NOTIONAL=1` for ~$1).
+    /// `None` = normal signal-driven flow.
     pub force_side: Option<Side>,
 }
 
@@ -45,7 +44,13 @@ pub struct Pipeline<B, L, S, K> {
 
 impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
     pub fn new(bars: B, llm: L, store: S, broker: K, cfg: PipelineConfig) -> Self {
-        Self { bars, llm, store, broker, cfg }
+        Self {
+            bars,
+            llm,
+            store,
+            broker,
+            cfg,
+        }
     }
 
     /// Run the full cycle for one symbol, returning the guarded decision. Every step
@@ -66,14 +71,16 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         let last_close = closes.last().copied().unwrap_or(0.0);
         let price = Decimal::from_f64_retain(last_close).unwrap_or_default();
 
-        // Verification short-circuit: FORCE_SIDE skips signal + both LLM calls and goes
-        // straight to a guarded order, so you can confirm the execute + Alpaca paper path
-        // end-to-end. The guards still clamp to max_notional — set MAX_NOTIONAL=1 for ~$1.
+        // Verification short-circuit (see `PipelineConfig::force_side`).
         if let Some(side) = self.cfg.force_side {
             let positions = self.broker.positions().await?;
             let position_qty = position_qty_for(&positions, symbol);
             let buying_power = self.broker.buying_power().await?;
-            let action = if side == Side::Buy { Action::Buy } else { Action::Sell };
+            let action = if side == Side::Buy {
+                Action::Buy
+            } else {
+                Action::Sell
+            };
             let forced = Decision {
                 symbol: symbol.clone(),
                 action,
@@ -81,25 +88,43 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
                 score: 0.0,
                 reason: format!("FORCED {action:?} — verification, bypasses signal/LLM"),
             };
-            self.append(symbol, ts, "decision", &decision_id, &json!({"forced": format!("{action:?}")})).await;
+            self.append(
+                symbol,
+                ts,
+                "decision",
+                &decision_id,
+                &json!({"forced": format!("{action:?}")}),
+            )
+            .await;
             let guarded = guards::apply(
-                forced, position_qty, buying_power, price,
-                &GuardConfig { max_notional: self.cfg.max_notional },
+                forced,
+                position_qty,
+                buying_power,
+                price,
+                &GuardConfig {
+                    max_notional: self.cfg.max_notional,
+                },
             );
-            self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded)).await;
+            self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded))
+                .await;
             return self.execute(symbol, ts, &decision_id, guarded).await;
         }
 
         // 2. signal — no signal ⇒ Hold, cycle over.
         let Some(sig) = signals::compute(&closes) else {
             let d = hold(symbol, "insufficient bars for signal");
-            self.append(symbol, ts, "guard", &decision_id, &guard_payload(&d)).await;
+            self.append(symbol, ts, "guard", &decision_id, &guard_payload(&d))
+                .await;
             return Ok(d);
         };
         self.append(
-            symbol, ts, "market_data", &decision_id,
+            symbol,
+            ts,
+            "market_data",
+            &decision_id,
             &json!({"last_close": last_close, "score": sig.score, "rsi": sig.rsi}),
-        ).await;
+        )
+        .await;
 
         // 3. analyst agent.
         let analyst_user = format!(
@@ -107,7 +132,14 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
             sig.score, sig.rsi, tail(&closes, 10),
         );
         let analysis = self.llm.message(ANALYST_SYS, &analyst_user).await?;
-        self.append(symbol, ts, "analyst", &decision_id, &json!({"analysis": analysis})).await;
+        self.append(
+            symbol,
+            ts,
+            "analyst",
+            &decision_id,
+            &json!({"analysis": analysis}),
+        )
+        .await;
 
         // 4. broker truth (positions + cash) for the decision + guards.
         let positions = self.broker.positions().await?;
@@ -121,14 +153,21 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         );
         let raw = self.llm.message(DECIDE_SYS, &decide_user).await?;
         let decision = parse_decision(symbol, &raw);
-        self.append(symbol, ts, "decision", &decision_id, &json!({"raw": raw})).await;
+        self.append(symbol, ts, "decision", &decision_id, &json!({"raw": raw}))
+            .await;
 
         // 6. guards — the last clamp before a real order.
         let guarded = guards::apply(
-            decision, position_qty, buying_power, price,
-            &GuardConfig { max_notional: self.cfg.max_notional },
+            decision,
+            position_qty,
+            buying_power,
+            price,
+            &GuardConfig {
+                max_notional: self.cfg.max_notional,
+            },
         );
-        self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded)).await;
+        self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded))
+            .await;
 
         // 7. execute.
         self.execute(symbol, ts, &decision_id, guarded).await
@@ -145,7 +184,11 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         guarded: Decision,
     ) -> Result<Decision, PipelineError> {
         if guarded.action != Action::Hold {
-            let side = if guarded.action == Action::Buy { Side::Buy } else { Side::Sell };
+            let side = if guarded.action == Action::Buy {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
             let req = OrderRequest {
                 symbol: symbol.clone(),
                 qty: guarded.qty,
@@ -153,22 +196,44 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
                 client_order_id: decision_id.to_string(),
             };
             self.append(
-                symbol, ts, "order_intent", decision_id,
+                symbol,
+                ts,
+                "order_intent",
+                decision_id,
                 &json!({"qty": req.qty.to_string(), "side": side}),
-            ).await;
+            )
+            .await;
             let order = self.broker.submit_order(&req).await?;
             self.append(
-                symbol, ts, "order_result", decision_id,
+                symbol,
+                ts,
+                "order_result",
+                decision_id,
                 &json!({"id": order.id, "status": order.status}),
-            ).await;
+            )
+            .await;
         }
         Ok(guarded)
     }
 
-    async fn append(&self, symbol: &Symbol, ts: i64, step: &str, decision_id: &str, payload: &Value) {
+    async fn append(
+        &self,
+        symbol: &Symbol,
+        ts: i64,
+        step: &str,
+        decision_id: &str,
+        payload: &Value,
+    ) {
         if let Err(e) = self
             .store
-            .append_event(&self.cfg.strategy_id, symbol, ts, step, decision_id, &payload.to_string())
+            .append_event(
+                &self.cfg.strategy_id,
+                symbol,
+                ts,
+                step,
+                decision_id,
+                &payload.to_string(),
+            )
             .await
         {
             tracing::error!(error = %e, step, "append_event failed");
@@ -215,7 +280,12 @@ fn parse_decision(symbol: &Symbol, raw: &str) -> Decision {
         Ok(v) => v,
         Err(_) => return hold(symbol, "decision JSON parse failed"),
     };
-    let action = match v.get("action").and_then(Value::as_str).map(|s| s.to_ascii_uppercase()).as_deref() {
+    let action = match v
+        .get("action")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_uppercase())
+        .as_deref()
+    {
         Some("BUY") => Action::Buy,
         Some("SELL") => Action::Sell,
         Some("HOLD") => Action::Hold,
@@ -226,7 +296,11 @@ fn parse_decision(symbol: &Symbol, raw: &str) -> Decision {
         action,
         qty: parse_decimal(v.get("qty")),
         score: v.get("score").and_then(Value::as_f64).unwrap_or(0.0),
-        reason: v.get("reason").and_then(Value::as_str).unwrap_or("").to_string(),
+        reason: v
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     }
 }
 
@@ -241,7 +315,10 @@ fn extract_json(s: &str) -> &str {
 fn parse_decimal(v: Option<&Value>) -> Decimal {
     match v {
         Some(Value::String(s)) => s.parse().unwrap_or_default(),
-        Some(Value::Number(n)) => n.as_f64().and_then(Decimal::from_f64_retain).unwrap_or_default(),
+        Some(Value::Number(n)) => n
+            .as_f64()
+            .and_then(Decimal::from_f64_retain)
+            .unwrap_or_default(),
         _ => Decimal::ZERO,
     }
 }
@@ -259,7 +336,11 @@ mod tests {
     struct FakeBars;
     #[async_trait]
     impl BarSource for FakeBars {
-        async fn daily_bars(&self, symbol: &Symbol, _limit: usize) -> Result<Vec<Bar>, MarketError> {
+        async fn daily_bars(
+            &self,
+            symbol: &Symbol,
+            _limit: usize,
+        ) -> Result<Vec<Bar>, MarketError> {
             let bars = (10..=50)
                 .map(|i| Bar {
                     symbol: symbol.clone(),
@@ -290,7 +371,15 @@ mod tests {
     }
     #[async_trait]
     impl Store for FakeStore {
-        async fn append_event(&self, _s: &str, _sym: &Symbol, _ts: i64, step: &str, _id: &str, _p: &str) -> Result<(), StoreError> {
+        async fn append_event(
+            &self,
+            _s: &str,
+            _sym: &Symbol,
+            _ts: i64,
+            step: &str,
+            _id: &str,
+            _p: &str,
+        ) -> Result<(), StoreError> {
             self.steps.lock().unwrap().push(step.to_string());
             Ok(())
         }
@@ -331,7 +420,12 @@ mod tests {
             FakeLlm,
             store,
             broker,
-            PipelineConfig { strategy_id: "test".into(), bar_window: 60, max_notional: dec!(100), force_side: None },
+            PipelineConfig {
+                strategy_id: "test".into(),
+                bar_window: 60,
+                max_notional: dec!(100),
+                force_side: None,
+            },
         );
 
         let d = pipe.run_symbol(&Symbol::from("BTC/USD")).await.unwrap();
@@ -344,7 +438,10 @@ mod tests {
         let steps = pipe.store.steps.lock().unwrap();
         let intent = steps.iter().position(|s| s == "order_intent").unwrap();
         let result = steps.iter().position(|s| s == "order_result").unwrap();
-        assert!(intent < result, "WAL: intent must precede result — {steps:?}");
+        assert!(
+            intent < result,
+            "WAL: intent must precede result — {steps:?}"
+        );
     }
 
     // LLM that MUST NOT be called on the forced path — errors if it is.

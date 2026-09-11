@@ -72,14 +72,13 @@ async fn main() -> anyhow::Result<()> {
         cfg.alpaca_data_base.clone(),
     );
 
-    let strat = cfg
-        .strategies
-        .first()
-        .context("no strategies configured")?;
-    println!("\nrunning strategy '{}' over {:?}\n", strat.id, strat.symbols);
+    let strat = cfg.strategies.first().context("no strategies configured")?;
+    println!(
+        "\nrunning strategy '{}' over {:?}\n",
+        strat.id, strat.symbols
+    );
 
-    // FORCE_SIDE=buy|sell is a verification switch: skip the signal + LLM and place one
-    // guarded (max_notional-capped) paper order, so you can see a fill in the dashboard.
+    // Verification switch — see `PipelineConfig::force_side`.
     let force_side = match std::env::var("FORCE_SIDE").unwrap_or_default().as_str() {
         "buy" | "BUY" => Some(Side::Buy),
         "sell" | "SELL" => Some(Side::Sell),
@@ -136,7 +135,8 @@ async fn run_with_store<L: LlmClient>(
             // Scylla is required — a trading service must not run without its WAL. Fail loud.
             let scylla_host =
                 std::env::var("SCYLLA_HOST").unwrap_or_else(|_| "127.0.0.1:9042".into());
-            let fallback = std::env::var("FALLBACK_PATH").unwrap_or_else(|_| "fallback.jsonl".into());
+            let fallback =
+                std::env::var("FALLBACK_PATH").unwrap_or_else(|_| "fallback.jsonl".into());
             let store = ScyllaStore::connect(&scylla_host, fallback)
                 .await
                 .with_context(|| {

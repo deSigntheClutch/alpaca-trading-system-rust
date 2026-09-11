@@ -95,7 +95,11 @@ impl ScyllaStore {
                 rec.decision_id.as_str(),
                 rec.payload.as_str(),
             );
-            match self.session.execute_unpaged(&self.append_event, values).await {
+            match self
+                .session
+                .execute_unpaged(&self.append_event, values)
+                .await
+            {
                 Ok(_) => replayed += 1,
                 Err(_) => still_failing.push(line.to_string()),
             }
@@ -147,7 +151,11 @@ impl Store for ScyllaStore {
             decision_id,
             payload,
         );
-        match self.session.execute_unpaged(&self.append_event, values).await {
+        match self
+            .session
+            .execute_unpaged(&self.append_event, values)
+            .await
+        {
             Ok(_) => Ok(()),
             // Scylla unreachable / timed out: never drop the record — write it local.
             // Only a fallback failure too is a hard error (truly no record possible).
@@ -250,7 +258,14 @@ mod tests {
     // The replay path must be able to decode exactly what the write path emitted.
     #[test]
     fn fallback_line_round_trips_into_record() {
-        let line = fallback_line("s1", "BTC/USD", 1_700_000_000_000, "order_intent", "s1:BTC/USD:d", r#"{"a":1}"#);
+        let line = fallback_line(
+            "s1",
+            "BTC/USD",
+            1_700_000_000_000,
+            "order_intent",
+            "s1:BTC/USD:d",
+            r#"{"a":1}"#,
+        );
         let rec: FallbackRecord = serde_json::from_str(&line).unwrap();
         assert_eq!(rec.strategy_id, "s1");
         assert_eq!(rec.symbol, "BTC/USD");

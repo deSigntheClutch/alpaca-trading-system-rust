@@ -16,19 +16,6 @@ pub enum Rating {
     StrongSell,
 }
 
-impl Rating {
-    // Display labels stay Chinese: they render in the HTML report.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Rating::StrongBuy => "强烈买入",
-            Rating::Buy => "买入",
-            Rating::Hold => "持有",
-            Rating::Sell => "卖出",
-            Rating::StrongSell => "强烈卖出",
-        }
-    }
-}
-
 pub struct Signal {
     pub score: f64, // [-1, 1]: >0 bullish, <0 bearish
     pub rating: Rating,
@@ -93,7 +80,11 @@ pub fn compute(closes: &[f64]) -> Option<Signal> {
     } else {
         Rating::StrongSell
     };
-    Some(Signal { score, rating, rsi: rsi_v })
+    Some(Signal {
+        score,
+        rating,
+        rsi: rsi_v,
+    })
 }
 
 #[cfg(test)]
