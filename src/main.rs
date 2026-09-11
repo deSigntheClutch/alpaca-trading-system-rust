@@ -5,12 +5,15 @@
 
 use anyhow::Context as _;
 
-use alpaca_trading_system::domain::config::Config;
+use alpaca_trading_system::domain::config::{Config, Strategy};
 use alpaca_trading_system::domain::types::Symbol;
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::alpaca::AlpacaRest;
 use alpaca_trading_system::infra::llm::{Claude, SONNET};
+use alpaca_trading_system::infra::memstore::MemStore;
 use alpaca_trading_system::infra::store::ScyllaStore;
+use alpaca_trading_system::traits::Store;
+use rust_decimal::Decimal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,23 +47,8 @@ async fn main() -> anyhow::Result<()> {
     .collect();
     if !missing.is_empty() {
         println!("\nmissing env: {missing:?}");
-        println!("copy .env.example → .env, fill the keys (paper), and start Scylla:");
-        println!("  docker compose up -d scylla && docker exec -i alpaca-scylla cqlsh < db/schema.cql");
+        println!("copy .env.example → .env and fill the keys (paper).");
         return Ok(());
-    }
-
-    // Scylla is required — a trading service must not run without its WAL. Fail loud.
-    let scylla_host = std::env::var("SCYLLA_HOST").unwrap_or_else(|_| "127.0.0.1:9042".into());
-    let fallback = std::env::var("FALLBACK_PATH").unwrap_or_else(|_| "fallback.jsonl".into());
-    let store = ScyllaStore::connect(&scylla_host, fallback)
-        .await
-        .with_context(|| {
-            format!("connect ScyllaDB at {scylla_host} — is it up? `docker compose up -d scylla` and apply db/schema.cql")
-        })?;
-
-    let replayed = store.replay_fallback().await?;
-    if replayed > 0 {
-        tracing::info!(replayed, "replayed buffered events from a prior outage");
     }
 
     // One HTTP client each, shared across symbols via the `&T` port impls.
@@ -78,17 +66,56 @@ async fn main() -> anyhow::Result<()> {
         .context("no strategies configured")?;
     println!("\nrunning strategy '{}' over {:?}\n", strat.id, strat.symbols);
 
+    // STORE=memory runs the decision + paper-order path with no external DB (no WAL
+    // audit; events go to stdout). Default is Scylla — a real WAL for a trading service.
+    match std::env::var("STORE").unwrap_or_default().as_str() {
+        "memory" | "mem" | "none" => {
+            println!("store      : in-memory (STORE=memory) — no WAL persistence\n");
+            let store = MemStore::default();
+            run_strategy(&alpaca, &claude, &store, strat, cfg.max_notional).await;
+        }
+        _ => {
+            // Scylla is required — a trading service must not run without its WAL. Fail loud.
+            let scylla_host =
+                std::env::var("SCYLLA_HOST").unwrap_or_else(|_| "127.0.0.1:9042".into());
+            let fallback = std::env::var("FALLBACK_PATH").unwrap_or_else(|_| "fallback.jsonl".into());
+            let store = ScyllaStore::connect(&scylla_host, fallback)
+                .await
+                .with_context(|| {
+                    format!("connect ScyllaDB at {scylla_host} — is it up? No Docker? Run with STORE=memory to skip it (no WAL), or start Scylla and apply db/schema.cql")
+                })?;
+
+            let replayed = store.replay_fallback().await?;
+            if replayed > 0 {
+                tracing::info!(replayed, "replayed buffered events from a prior outage");
+            }
+            run_strategy(&alpaca, &claude, &store, strat, cfg.max_notional).await;
+        }
+    }
+
+    Ok(())
+}
+
+/// Run one decision cycle per symbol. Generic over the `Store` so the same loop
+/// serves both ScyllaStore and MemStore (a shared `&S` backs every symbol's pipeline).
+async fn run_strategy<S: Store>(
+    alpaca: &AlpacaRest,
+    claude: &Claude,
+    store: &S,
+    strat: &Strategy,
+    max_notional: Decimal,
+) {
     for sym in &strat.symbols {
         let symbol = Symbol::from(sym.as_str());
         let pipe = Pipeline::new(
-            &alpaca,
-            &claude,
-            &store,
-            &alpaca,
+            alpaca,
+            claude,
+            store,
+            alpaca,
             PipelineConfig {
                 strategy_id: strat.id.clone(),
                 bar_window: 60,
-                max_notional: cfg.max_notional,
+                max_notional,
             },
         );
         match pipe.run_symbol(&symbol).await {
@@ -99,6 +126,4 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => tracing::error!(error = %e, %symbol, "cycle failed"),
         }
     }
-
-    Ok(())
 }

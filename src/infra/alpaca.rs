@@ -49,8 +49,10 @@ impl AlpacaRest {
             http,
             key,
             secret,
-            trade_base,
-            data_base,
+            // Paths below append `/v2/...` themselves, so strip a trailing `/` and any
+            // `/v2` the user left on the base (tolerate `.../markets` and `.../markets/v2`).
+            trade_base: normalize_trade_base(&trade_base),
+            data_base: data_base.trim_end_matches('/').to_string(),
         }
     }
 
@@ -58,6 +60,14 @@ impl AlpacaRest {
         rb.header(KEY_HEADER, &self.key)
             .header(SECRET_HEADER, &self.secret)
     }
+}
+
+/// Strip a trailing `/` and a trailing `/v2` from the trading base, so the request
+/// paths (which add `/v2/...`) don't produce `/v2/v2/...` when a user's base already
+/// ends in `/v2`.
+fn normalize_trade_base(base: &str) -> String {
+    let b = base.trim_end_matches('/');
+    b.strip_suffix("/v2").unwrap_or(b).to_string()
 }
 
 /// Alpaca crypto bars response: `{ "bars": { "BTC/USD": [ {...} ] } }`.
@@ -441,5 +451,14 @@ mod tests {
             classify(r#"[{"T":"error","code":402,"msg":"auth failed"}]"#),
             Handshake::Error(_)
         ));
+    }
+
+    #[test]
+    fn trade_base_never_doubles_v2() {
+        let want = "https://paper-api.alpaca.markets";
+        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets"), want);
+        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets/"), want);
+        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets/v2"), want);
+        assert_eq!(normalize_trade_base("https://paper-api.alpaca.markets/v2/"), want);
     }
 }
