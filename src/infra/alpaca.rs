@@ -95,12 +95,17 @@ impl BarSource for AlpacaRest {
     async fn daily_bars(&self, symbol: &Symbol, limit: usize) -> Result<Vec<Bar>, MarketError> {
         let url = format!("{}/v1beta3/crypto/us/bars", self.data_base);
         let limit_s = limit.to_string();
+        // Without an explicit `start`, Alpaca returns only the current day's bar. Look
+        // back `limit` days (+buffer) so `limit` daily bars actually come back.
+        let start = (chrono::Utc::now() - chrono::Duration::days(limit as i64 + 5))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let resp = self
             .auth(self.http.get(&url))
             .query(&[
                 ("symbols", symbol.as_str()),
                 ("timeframe", "1Day"),
                 ("limit", &limit_s),
+                ("start", &start),
                 ("sort", "desc"), // newest first, so `limit` gives the RECENT window
             ])
             .send()

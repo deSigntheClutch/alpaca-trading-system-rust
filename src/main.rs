@@ -9,10 +9,10 @@ use alpaca_trading_system::domain::config::{Config, Strategy};
 use alpaca_trading_system::domain::types::Symbol;
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::alpaca::AlpacaRest;
-use alpaca_trading_system::infra::llm::{Claude, SONNET};
+use alpaca_trading_system::infra::llm::{Bedrock, Claude, BEDROCK_SONNET4, SONNET};
 use alpaca_trading_system::infra::memstore::MemStore;
 use alpaca_trading_system::infra::store::ScyllaStore;
-use alpaca_trading_system::traits::Store;
+use alpaca_trading_system::traits::{LlmClient, Store};
 use rust_decimal::Decimal;
 
 #[tokio::main]
@@ -35,11 +35,24 @@ async fn main() -> anyhow::Result<()> {
     println!("data base  : {}", cfg.alpaca_data_base);
     println!("strategies : {}", cfg.strategies.len());
 
+    // LLM backend: LLM=bedrock uses Amazon Bedrock (bearer API key); default is Anthropic
+    // direct. Each needs a different key, so the creds check depends on the choice.
+    let use_bedrock = matches!(
+        std::env::var("LLM").unwrap_or_default().as_str(),
+        "bedrock" | "aws"
+    );
+    let bedrock_key = std::env::var("BEDROCK_API_KEY").unwrap_or_default();
+
     // Missing creds → tell the user exactly what to provide, then stop (no crash).
+    let llm_cred = if use_bedrock {
+        ("BEDROCK_API_KEY", &bedrock_key)
+    } else {
+        ("ANTHROPIC_API_KEY", &cfg.anthropic_key)
+    };
     let missing: Vec<&str> = [
         ("ALPACA_KEY", &cfg.alpaca_key),
         ("ALPACA_SECRET", &cfg.alpaca_secret),
-        ("ANTHROPIC_API_KEY", &cfg.anthropic_key),
+        llm_cred,
     ]
     .into_iter()
     .filter(|(_, v)| v.is_empty())
@@ -58,7 +71,6 @@ async fn main() -> anyhow::Result<()> {
         cfg.alpaca_trade_base.clone(),
         cfg.alpaca_data_base.clone(),
     );
-    let claude = Claude::new(cfg.anthropic_key.clone(), SONNET);
 
     let strat = cfg
         .strategies
@@ -66,13 +78,37 @@ async fn main() -> anyhow::Result<()> {
         .context("no strategies configured")?;
     println!("\nrunning strategy '{}' over {:?}\n", strat.id, strat.symbols);
 
+    // Build the chosen LLM client, then hand off to the (generic) store+run path.
+    if use_bedrock {
+        let region = std::env::var("BEDROCK_REGION").unwrap_or_else(|_| "us-east-1".into());
+        let model = std::env::var("BEDROCK_MODEL").unwrap_or_else(|_| BEDROCK_SONNET4.into());
+        println!("llm        : bedrock ({region} / {model})");
+        let llm = Bedrock::new(bedrock_key, region, model);
+        run_with_store(&alpaca, &llm, strat, cfg.max_notional).await?;
+    } else {
+        println!("llm        : anthropic ({SONNET})");
+        let llm = Claude::new(cfg.anthropic_key.clone(), SONNET);
+        run_with_store(&alpaca, &llm, strat, cfg.max_notional).await?;
+    }
+
+    Ok(())
+}
+
+/// Pick the store backend, then run the strategy. Generic over the LLM so both backends
+/// reuse this (and the STORE branch) unchanged.
+async fn run_with_store<L: LlmClient>(
+    alpaca: &AlpacaRest,
+    llm: &L,
+    strat: &Strategy,
+    max_notional: Decimal,
+) -> anyhow::Result<()> {
     // STORE=memory runs the decision + paper-order path with no external DB (no WAL
     // audit; events go to stdout). Default is Scylla — a real WAL for a trading service.
     match std::env::var("STORE").unwrap_or_default().as_str() {
         "memory" | "mem" | "none" => {
             println!("store      : in-memory (STORE=memory) — no WAL persistence\n");
             let store = MemStore::default();
-            run_strategy(&alpaca, &claude, &store, strat, cfg.max_notional).await;
+            run_strategy(alpaca, llm, &store, strat, max_notional).await;
         }
         _ => {
             // Scylla is required — a trading service must not run without its WAL. Fail loud.
@@ -89,18 +125,17 @@ async fn main() -> anyhow::Result<()> {
             if replayed > 0 {
                 tracing::info!(replayed, "replayed buffered events from a prior outage");
             }
-            run_strategy(&alpaca, &claude, &store, strat, cfg.max_notional).await;
+            run_strategy(alpaca, llm, &store, strat, max_notional).await;
         }
     }
-
     Ok(())
 }
 
-/// Run one decision cycle per symbol. Generic over the `Store` so the same loop
-/// serves both ScyllaStore and MemStore (a shared `&S` backs every symbol's pipeline).
-async fn run_strategy<S: Store>(
+/// Run one decision cycle per symbol. Generic over the LLM and `Store` so the same loop
+/// serves every backend (a shared `&L`/`&S` backs every symbol's pipeline).
+async fn run_strategy<L: LlmClient, S: Store>(
     alpaca: &AlpacaRest,
-    claude: &Claude,
+    llm: &L,
     store: &S,
     strat: &Strategy,
     max_notional: Decimal,
@@ -109,7 +144,7 @@ async fn run_strategy<S: Store>(
         let symbol = Symbol::from(sym.as_str());
         let pipe = Pipeline::new(
             alpaca,
-            claude,
+            llm,
             store,
             alpaca,
             PipelineConfig {

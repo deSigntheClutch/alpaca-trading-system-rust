@@ -1,5 +1,8 @@
-//! Claude adapter (Anthropic Messages API). Sonnet for the reasoning agents, Haiku
-//! for cheap classification later.
+//! LLM adapters, both implementing `LlmClient`:
+//! - `Claude`  — Anthropic Messages API direct (needs an Anthropic API key).
+//! - `Bedrock` — Amazon Bedrock Converse API with a Bedrock API key (bearer token).
+//!   Same-shaped HTTP call, just a different URL/auth/body — no AWS SDK, no SigV4.
+//!   This is the Amazon-internal path.
 
 use std::time::Duration;
 
@@ -11,6 +14,12 @@ use crate::traits::LlmClient;
 
 pub const SONNET: &str = "claude-sonnet-5";
 pub const HAIKU: &str = "claude-haiku-4-5-20251001";
+
+/// Bedrock model IDs (region us-east-1). If a model rejects on-demand invocation with
+/// "isn't supported... use an inference profile", switch to the `us.`-prefixed profile
+/// ID (e.g. `us.anthropic.claude-sonnet-4-20250514-v1:0`) via `BEDROCK_MODEL`.
+pub const BEDROCK_HAIKU: &str = "anthropic.claude-3-5-haiku-20241022-v1:0";
+pub const BEDROCK_SONNET4: &str = "anthropic.claude-sonnet-4-20250514-v1:0";
 
 const API_BASE: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
@@ -83,5 +92,92 @@ impl LlmClient for Claude {
             .into_iter()
             .find_map(|b| b.text)
             .ok_or_else(|| LlmError::BadResponse("no text block in response".into()))
+    }
+}
+
+/// Amazon Bedrock via the Converse API + a Bedrock API key (bearer token). URL encodes
+/// the region and model ID; auth is a single `Authorization: Bearer` header.
+pub struct Bedrock {
+    http: reqwest::Client,
+    api_key: String,
+    region: String,
+    model: String,
+}
+
+impl Bedrock {
+    pub fn new(api_key: String, region: String, model: String) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("reqwest client");
+        Self {
+            http,
+            api_key,
+            region,
+            model,
+        }
+    }
+}
+
+/// Converse response: `{ "output": { "message": { "content": [ { "text": "..." } ] } } }`.
+#[derive(Deserialize)]
+struct ConverseResponse {
+    output: ConverseOutput,
+}
+#[derive(Deserialize)]
+struct ConverseOutput {
+    message: ConverseMessage,
+}
+#[derive(Deserialize)]
+struct ConverseMessage {
+    content: Vec<ConverseBlock>,
+}
+#[derive(Deserialize)]
+struct ConverseBlock {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[async_trait]
+impl LlmClient for Bedrock {
+    async fn message(&self, system: &str, user: &str) -> Result<String, LlmError> {
+        // model ID stays literal in the path (colons are valid path chars); only the
+        // region varies structurally.
+        let url = format!(
+            "https://bedrock-runtime.{}.amazonaws.com/model/{}/converse",
+            self.region, self.model
+        );
+        let body = serde_json::json!({
+            "system":   [{ "text": system }],
+            "messages": [{ "role": "user", "content": [{ "text": user }] }],
+            "inferenceConfig": { "maxTokens": MAX_TOKENS },
+        });
+        let resp = self
+            .http
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::Request(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let code = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Request(format!("{code}: {text}")));
+        }
+
+        let parsed: ConverseResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
+
+        parsed
+            .output
+            .message
+            .content
+            .into_iter()
+            .find_map(|b| b.text)
+            .ok_or_else(|| LlmError::BadResponse("no text block in Converse output".into()))
     }
 }
