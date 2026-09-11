@@ -6,7 +6,7 @@
 use anyhow::Context as _;
 
 use alpaca_trading_system::domain::config::{Config, Strategy};
-use alpaca_trading_system::domain::types::Symbol;
+use alpaca_trading_system::domain::types::{Side, Symbol};
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::alpaca::AlpacaRest;
 use alpaca_trading_system::infra::llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
@@ -78,17 +78,32 @@ async fn main() -> anyhow::Result<()> {
         .context("no strategies configured")?;
     println!("\nrunning strategy '{}' over {:?}\n", strat.id, strat.symbols);
 
+    // FORCE_SIDE=buy|sell is a verification switch: skip the signal + LLM and place one
+    // guarded (max_notional-capped) paper order, so you can see a fill in the dashboard.
+    let force_side = match std::env::var("FORCE_SIDE").unwrap_or_default().as_str() {
+        "buy" | "BUY" => Some(Side::Buy),
+        "sell" | "SELL" => Some(Side::Sell),
+        "" => None,
+        other => {
+            println!("FORCE_SIDE='{other}' not recognized (use buy|sell) — ignoring");
+            None
+        }
+    };
+    if let Some(side) = force_side {
+        println!("FORCE_SIDE : {side:?} — bypassing signal/LLM, capped at MAX_NOTIONAL");
+    }
+
     // Build the chosen LLM client, then hand off to the (generic) store+run path.
     if use_bedrock {
         let region = std::env::var("BEDROCK_REGION").unwrap_or_else(|_| "us-east-1".into());
         let model = std::env::var("BEDROCK_MODEL").unwrap_or_else(|_| BEDROCK_SONNET.into());
         println!("llm        : bedrock ({region} / {model})");
         let llm = Bedrock::new(bedrock_key, region, model);
-        run_with_store(&alpaca, &llm, strat, cfg.max_notional).await?;
+        run_with_store(&alpaca, &llm, strat, cfg.max_notional, force_side).await?;
     } else {
         println!("llm        : anthropic ({SONNET})");
         let llm = Claude::new(cfg.anthropic_key.clone(), SONNET);
-        run_with_store(&alpaca, &llm, strat, cfg.max_notional).await?;
+        run_with_store(&alpaca, &llm, strat, cfg.max_notional, force_side).await?;
     }
 
     Ok(())
@@ -101,14 +116,21 @@ async fn run_with_store<L: LlmClient>(
     llm: &L,
     strat: &Strategy,
     max_notional: Decimal,
+    force_side: Option<Side>,
 ) -> anyhow::Result<()> {
     // STORE=memory runs the decision + paper-order path with no external DB (no WAL
     // audit; events go to stdout). Default is Scylla — a real WAL for a trading service.
     match std::env::var("STORE").unwrap_or_default().as_str() {
         "memory" | "mem" | "none" => {
-            println!("store      : in-memory (STORE=memory) — no WAL persistence\n");
-            let store = MemStore::default();
-            run_strategy(alpaca, llm, &store, strat, max_notional).await;
+            // Optional EVENTS_PATH: append every event as a JSON line for `jq` inspection —
+            // the only way to see the decision trail without a DB.
+            let events_path = std::env::var("EVENTS_PATH").ok().map(Into::into);
+            match &events_path {
+                Some(p) => println!("store      : in-memory (STORE=memory) — events → {p:?} (no WAL)\n"),
+                None => println!("store      : in-memory (STORE=memory) — stdout only (set EVENTS_PATH to log)\n"),
+            }
+            let store = MemStore::new(events_path);
+            run_strategy(alpaca, llm, &store, strat, max_notional, force_side).await;
         }
         _ => {
             // Scylla is required — a trading service must not run without its WAL. Fail loud.
@@ -125,7 +147,7 @@ async fn run_with_store<L: LlmClient>(
             if replayed > 0 {
                 tracing::info!(replayed, "replayed buffered events from a prior outage");
             }
-            run_strategy(alpaca, llm, &store, strat, max_notional).await;
+            run_strategy(alpaca, llm, &store, strat, max_notional, force_side).await;
         }
     }
     Ok(())
@@ -139,6 +161,7 @@ async fn run_strategy<L: LlmClient, S: Store>(
     store: &S,
     strat: &Strategy,
     max_notional: Decimal,
+    force_side: Option<Side>,
 ) {
     for sym in &strat.symbols {
         let symbol = Symbol::from(sym.as_str());
@@ -151,6 +174,7 @@ async fn run_strategy<L: LlmClient, S: Store>(
                 strategy_id: strat.id.clone(),
                 bar_window: 60,
                 max_notional,
+                force_side,
             },
         );
         match pipe.run_symbol(&symbol).await {

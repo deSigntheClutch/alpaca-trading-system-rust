@@ -29,6 +29,9 @@ pub struct PipelineConfig {
     /// How many daily bars to pull for the signal window (needs ≥20).
     pub bar_window: usize,
     pub max_notional: Decimal,
+    /// Verification only: when set, skip the signal + LLM and force this side's order
+    /// (still clamped by the guards to `max_notional`). `None` = normal signal-driven flow.
+    pub force_side: Option<Side>,
 }
 
 /// Orchestrates one decision cycle for one symbol over the four ports.
@@ -61,6 +64,31 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         }
         let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
         let last_close = closes.last().copied().unwrap_or(0.0);
+        let price = Decimal::from_f64_retain(last_close).unwrap_or_default();
+
+        // Verification short-circuit: FORCE_SIDE skips signal + both LLM calls and goes
+        // straight to a guarded order, so you can confirm the execute + Alpaca paper path
+        // end-to-end. The guards still clamp to max_notional — set MAX_NOTIONAL=1 for ~$1.
+        if let Some(side) = self.cfg.force_side {
+            let positions = self.broker.positions().await?;
+            let position_qty = position_qty_for(&positions, symbol);
+            let buying_power = self.broker.buying_power().await?;
+            let action = if side == Side::Buy { Action::Buy } else { Action::Sell };
+            let forced = Decision {
+                symbol: symbol.clone(),
+                action,
+                qty: Decimal::from(1_000_000_000u64), // huge → guard clamps to max_notional/price
+                score: 0.0,
+                reason: format!("FORCED {action:?} — verification, bypasses signal/LLM"),
+            };
+            self.append(symbol, ts, "decision", &decision_id, &json!({"forced": format!("{action:?}")})).await;
+            let guarded = guards::apply(
+                forced, position_qty, buying_power, price,
+                &GuardConfig { max_notional: self.cfg.max_notional },
+            );
+            self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded)).await;
+            return self.execute(symbol, ts, &decision_id, guarded).await;
+        }
 
         // 2. signal — no signal ⇒ Hold, cycle over.
         let Some(sig) = signals::compute(&closes) else {
@@ -96,29 +124,41 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         self.append(symbol, ts, "decision", &decision_id, &json!({"raw": raw})).await;
 
         // 6. guards — the last clamp before a real order.
-        let price = Decimal::from_f64_retain(last_close).unwrap_or_default();
         let guarded = guards::apply(
             decision, position_qty, buying_power, price,
             &GuardConfig { max_notional: self.cfg.max_notional },
         );
         self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded)).await;
 
-        // 7. execute — WAL: intent BEFORE submit, result AFTER.
+        // 7. execute.
+        self.execute(symbol, ts, &decision_id, guarded).await
+    }
+
+    /// Execute a guarded decision. WAL: `order_intent` is persisted BEFORE the broker
+    /// call, `order_result` AFTER — a crash between the two leaves a recoverable intent,
+    /// never an order with no record. Hold ⇒ no-op. Returns the decision unchanged.
+    async fn execute(
+        &self,
+        symbol: &Symbol,
+        ts: i64,
+        decision_id: &str,
+        guarded: Decision,
+    ) -> Result<Decision, PipelineError> {
         if guarded.action != Action::Hold {
             let side = if guarded.action == Action::Buy { Side::Buy } else { Side::Sell };
             let req = OrderRequest {
                 symbol: symbol.clone(),
                 qty: guarded.qty,
                 side,
-                client_order_id: decision_id.clone(),
+                client_order_id: decision_id.to_string(),
             };
             self.append(
-                symbol, ts, "order_intent", &decision_id,
+                symbol, ts, "order_intent", decision_id,
                 &json!({"qty": req.qty.to_string(), "side": side}),
             ).await;
             let order = self.broker.submit_order(&req).await?;
             self.append(
-                symbol, ts, "order_result", &decision_id,
+                symbol, ts, "order_result", decision_id,
                 &json!({"id": order.id, "status": order.status}),
             ).await;
         }
@@ -291,7 +331,7 @@ mod tests {
             FakeLlm,
             store,
             broker,
-            PipelineConfig { strategy_id: "test".into(), bar_window: 60, max_notional: dec!(100) },
+            PipelineConfig { strategy_id: "test".into(), bar_window: 60, max_notional: dec!(100), force_side: None },
         );
 
         let d = pipe.run_symbol(&Symbol::from("BTC/USD")).await.unwrap();
@@ -305,5 +345,37 @@ mod tests {
         let intent = steps.iter().position(|s| s == "order_intent").unwrap();
         let result = steps.iter().position(|s| s == "order_result").unwrap();
         assert!(intent < result, "WAL: intent must precede result — {steps:?}");
+    }
+
+    // LLM that MUST NOT be called on the forced path — errors if it is.
+    struct NeverLlm;
+    #[async_trait]
+    impl LlmClient for NeverLlm {
+        async fn message(&self, _system: &str, _user: &str) -> Result<String, LlmError> {
+            Err(LlmError::Request("LLM called on forced path".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn force_side_bypasses_llm_and_clamps() {
+        let pipe = Pipeline::new(
+            FakeBars,
+            NeverLlm,
+            FakeStore::default(),
+            FakeBroker::default(),
+            PipelineConfig {
+                strategy_id: "test".into(),
+                bar_window: 60,
+                max_notional: dec!(100),
+                force_side: Some(Side::Buy),
+            },
+        );
+
+        let d = pipe.run_symbol(&Symbol::from("BTC/USD")).await.unwrap();
+
+        // Forced buy, clamped to max_notional 100 @ price 50 → qty 2, no LLM call.
+        assert_eq!(d.action, Action::Buy);
+        assert_eq!(d.qty, dec!(2));
+        assert_eq!(*pipe.broker.submitted_qty.lock().unwrap(), Some(dec!(2)));
     }
 }
