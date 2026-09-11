@@ -5,14 +5,17 @@
 
 use anyhow::Context as _;
 
+use std::io::Write as _;
+
 use alpaca_trading_system::domain::config::{Config, Strategy};
 use alpaca_trading_system::domain::types::{Side, Symbol};
+use alpaca_trading_system::engine::backtest::{self, BacktestConfig};
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::alpaca::AlpacaRest;
 use alpaca_trading_system::infra::llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
 use alpaca_trading_system::infra::memstore::MemStore;
 use alpaca_trading_system::infra::store::ScyllaStore;
-use alpaca_trading_system::traits::{LlmClient, Store};
+use alpaca_trading_system::traits::{BarSource, LlmClient, Store};
 use rust_decimal::Decimal;
 
 #[tokio::main]
@@ -92,19 +95,87 @@ async fn main() -> anyhow::Result<()> {
         println!("FORCE_SIDE : {side:?} — bypassing signal/LLM, capped at MAX_NOTIONAL");
     }
 
-    // Build the chosen LLM client, then hand off to the (generic) store+run path.
+    // BACKTEST=1 replays the SAME pipeline over history (no live orders) and writes
+    // backtest.jsonl for the dashboard, instead of running the live cycle.
+    let backtest = matches!(std::env::var("BACKTEST").as_deref(), Ok("1") | Ok("true"));
+
+    // Build the chosen LLM client, then hand off to the backtest or live run path.
     if use_bedrock {
         let region = std::env::var("BEDROCK_REGION").unwrap_or_else(|_| "us-east-1".into());
         let model = std::env::var("BEDROCK_MODEL").unwrap_or_else(|_| BEDROCK_SONNET.into());
         println!("llm        : bedrock ({region} / {model})");
         let llm = Bedrock::new(bedrock_key, region, model);
-        run_with_store(&alpaca, &llm, strat, cfg.max_notional, force_side).await?;
+        if backtest {
+            run_backtest_all(&alpaca, &llm, strat, cfg.max_notional).await?;
+        } else {
+            run_with_store(&alpaca, &llm, strat, cfg.max_notional, force_side).await?;
+        }
     } else {
         println!("llm        : anthropic ({SONNET})");
         let llm = Claude::new(cfg.anthropic_key.clone(), SONNET);
-        run_with_store(&alpaca, &llm, strat, cfg.max_notional, force_side).await?;
+        if backtest {
+            run_backtest_all(&alpaca, &llm, strat, cfg.max_notional).await?;
+        } else {
+            run_with_store(&alpaca, &llm, strat, cfg.max_notional, force_side).await?;
+        }
     }
 
+    Ok(())
+}
+
+/// Walk-forward backtest each symbol over history and append one `BacktestResult`
+/// JSON line per symbol to `backtest.jsonl` (for the dashboard). Reuses the live
+/// pipeline via `engine::backtest`; no live orders are placed. `BACKTEST_DAYS`
+/// (default 90) caps how many recent days get a decision — each day = 2 LLM calls.
+async fn run_backtest_all<L: LlmClient>(
+    alpaca: &AlpacaRest,
+    llm: &L,
+    strat: &Strategy,
+    max_notional: Decimal,
+) -> anyhow::Result<()> {
+    let days: usize = std::env::var("BACKTEST_DAYS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(90);
+    let out_path = std::env::var("BACKTEST_PATH").unwrap_or_else(|_| "backtest.jsonl".into());
+    let fetch = days + 20; // +20-bar warmup for the signal window
+
+    let calls = strat.symbols.len() * days * 2;
+    println!("BACKTEST   : {days} days/symbol → {out_path}");
+    println!("           : ≈ {calls} LLM calls ({} symbols × {days} days × 2 agents) — this costs money\n", strat.symbols.len());
+
+    // Fresh file each run (results are a snapshot, not an append-only log).
+    let mut file =
+        std::fs::File::create(&out_path).with_context(|| format!("create {out_path}"))?;
+
+    for sym in &strat.symbols {
+        let symbol = Symbol::from(sym.as_str());
+        let bars = alpaca
+            .daily_bars(&symbol, fetch)
+            .await
+            .with_context(|| format!("fetch bars for {symbol}"))?;
+        let result = backtest::run_backtest(
+            &symbol,
+            bars,
+            llm,
+            BacktestConfig {
+                starting_cash: 10_000.0,
+                max_notional,
+                days,
+            },
+        )
+        .await;
+        println!(
+            "  {symbol}: {} days · return {:.2}% · {} trades · buy&hold {:.2}%",
+            result.days.len(),
+            result.total_return * 100.0,
+            result.num_trades,
+            result.buy_hold_return * 100.0,
+        );
+        writeln!(file, "{}", serde_json::to_string(&result)?)?;
+    }
+
+    println!("\nwrote {out_path} — view it with `cargo run --bin web`");
     Ok(())
 }
 
@@ -133,10 +204,8 @@ async fn run_with_store<L: LlmClient>(
         }
         _ => {
             // Scylla is required — a trading service must not run without its WAL. Fail loud.
-            let scylla_host =
-                std::env::var("SCYLLA_HOST").unwrap_or_else(|_| "127.0.0.1:9042".into());
-            let fallback =
-                std::env::var("FALLBACK_PATH").unwrap_or_else(|_| "fallback.jsonl".into());
+            let scylla_host = std::env::var("SCYLLA_HOST").unwrap_or_else(|_| "127.0.0.1:9042".into());
+            let fallback = std::env::var("FALLBACK_PATH").unwrap_or_else(|_| "fallback.jsonl".into());
             let store = ScyllaStore::connect(&scylla_host, fallback)
                 .await
                 .with_context(|| {
