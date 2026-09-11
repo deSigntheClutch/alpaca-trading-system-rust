@@ -14,6 +14,9 @@ use alpaca_trading_system::infra::store::ScyllaStore;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load .env into the process env (no-op if the file is absent). Real env vars win.
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
