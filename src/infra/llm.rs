@@ -15,11 +15,11 @@ use crate::traits::LlmClient;
 pub const SONNET: &str = "claude-sonnet-5";
 pub const HAIKU: &str = "claude-haiku-4-5-20251001";
 
-/// Bedrock model IDs (region us-east-1). If a model rejects on-demand invocation with
-/// "isn't supported... use an inference profile", switch to the `us.`-prefixed profile
-/// ID (e.g. `us.anthropic.claude-sonnet-4-20250514-v1:0`) via `BEDROCK_MODEL`.
-pub const BEDROCK_HAIKU: &str = "anthropic.claude-3-5-haiku-20241022-v1:0";
-pub const BEDROCK_SONNET4: &str = "anthropic.claude-sonnet-4-20250514-v1:0";
+/// Bedrock inference-profile IDs (region us-east-1). Use the `us.`-prefixed *profile*
+/// ID, not the bare model ID — newer Claude models reject on-demand invocation by bare
+/// ID ("...isn't supported. Retry with an inference profile"). Override via `BEDROCK_MODEL`.
+pub const BEDROCK_HAIKU: &str = "us.anthropic.claude-haiku-4-5-20251001-v1:0";
+pub const BEDROCK_SONNET: &str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
 
 const API_BASE: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";

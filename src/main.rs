@@ -9,7 +9,7 @@ use alpaca_trading_system::domain::config::{Config, Strategy};
 use alpaca_trading_system::domain::types::Symbol;
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::alpaca::AlpacaRest;
-use alpaca_trading_system::infra::llm::{Bedrock, Claude, BEDROCK_SONNET4, SONNET};
+use alpaca_trading_system::infra::llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
 use alpaca_trading_system::infra::memstore::MemStore;
 use alpaca_trading_system::infra::store::ScyllaStore;
 use alpaca_trading_system::traits::{LlmClient, Store};
@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
     // Build the chosen LLM client, then hand off to the (generic) store+run path.
     if use_bedrock {
         let region = std::env::var("BEDROCK_REGION").unwrap_or_else(|_| "us-east-1".into());
-        let model = std::env::var("BEDROCK_MODEL").unwrap_or_else(|_| BEDROCK_SONNET4.into());
+        let model = std::env::var("BEDROCK_MODEL").unwrap_or_else(|_| BEDROCK_SONNET.into());
         println!("llm        : bedrock ({region} / {model})");
         let llm = Bedrock::new(bedrock_key, region, model);
         run_with_store(&alpaca, &llm, strat, cfg.max_notional).await?;
