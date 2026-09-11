@@ -25,12 +25,15 @@ flowchart TB
     F["streaming loop — ingest is tested; main is one-shot"]
     G["multi-strategy — config holds a list; main runs strategies[0] only"]
   end
-  subgraph TODO["⬜ Not started"]
+  subgraph NEXT["🔜 Designed — building next"]
+    K["backtest engine — walk-forward, LLM-in-loop (§6)"]
+    L["frontend dashboard — React+Vite + axum API (§7)"]
+  end
+  subgraph TODO["⬜ Later"]
     H["outcome job + L0 eval (learning loop)"]
     I["sentiment + risk agents"]
-    J["web dashboard"]
   end
-  DONE --> PARTIAL --> TODO
+  DONE --> PARTIAL --> NEXT --> TODO
 ```
 
 ---
@@ -81,8 +84,10 @@ flowchart TB
   ENG --> ST[/"Store"/]
   ENG --> LL[/"LlmClient"/]
   BS --- AL1["AlpacaRest (REST bars)"]
+  BS --- HB["HistoricalBars (backtest)"]
   MS --- AL2["CryptoWs (24/7 WS)"]
   BR --- AL1b["AlpacaRest (orders/account)"]
+  BR --- SB["SimBroker (backtest)"]
   ST --- SC["ScyllaStore (WAL)"]
   ST --- MEM["MemStore (+JSONL)"]
   LL --- CL["Claude (Anthropic)"]
@@ -133,7 +138,70 @@ mode. (Grafana/Scylla-Monitoring is ops metrics, not row browsing.)
 
 ---
 
-## 6. Extend / roadmap (what we can add)
+## 6. Backtest — walk-forward, reuses the live pipeline
+
+Backtest runs the **same `Pipeline`** (signals → LLM analyst+decision → guards) as
+live; only two ports are swapped, so a backtested edge uses the identical decision
+chain as paper — no divergent logic. In-tree module `engine/backtest.rs` (no new crate).
+
+```mermaid
+flowchart LR
+  H["HistoricalBars (BarSource)<br/>daily window up to cursor T — no lookahead"] --> P
+  SB["SimBroker (Broker)<br/>in-mem cash+position, fill @ close[T]"] --> P
+  CS["CollectingStore (Store)<br/>captures analyst+decision text per day"] --> P
+  P["Pipeline.run_symbol (unchanged)<br/>signals · LLM · guards"] --> REC["rich per-day record"]
+  REC --> LOOP{"cursor < last?"}
+  LOOP -- "T+1" --> P
+  LOOP -- "done" --> OUT["backtest.jsonl (one result/symbol):<br/>price series + decision points + metrics"]
+```
+
+- **LLM in the loop** (chosen): each day replays the real analyst+decision agents, so
+  the backtest reflects the AI's behavior — cost ≈ `days × 2` LLM calls/symbol, so the
+  window is capped (`BACKTEST_DAYS`, default ~90) with a startup cost print.
+- **Rich per-day record** (this is what the frontend visualizes): `{ts, close, score,
+  rsi, action, qty, decision_reason, analyst_text}`. A `CollectingStore` (tiny `Store`
+  impl) grabs the analyst + decision text `run_symbol` persists, so each buy/sell point
+  carries **why the LLM chose it**.
+- **Metrics**: total return · max drawdown · #trades · vs buy&hold.
+- **Reused as-is**: `signals::compute`, `guards::apply`, the whole `Pipeline`, config/LLM wiring.
+- `ponytail:` close-to-close fills, no slippage/fees — optimistic upper bound; add a fill
+  model when it matters. Unit-tested with a FakeLlm (no Bedrock spend in CI).
+- Run: `BACKTEST=1 cargo run` → writes `backtest.jsonl` for the dashboard.
+
+---
+
+## 7. Frontend — visualize decisions on the chart (React + Vite + ts-rs)
+
+**The whole point: see WHERE it bought/sold and WHY.** Buy/sell markers overlaid on the
+price chart; click a marker (or a table row) → the signal (score/RSI) + the LLM's
+analyst & decision text for that point. Same view for backtest and for live/paper runs.
+New `frontend/` folder (node toolchain, physically separate from the Rust crate); a
+read-only axum bin serves the data.
+
+```mermaid
+flowchart LR
+  EV["events.jsonl<br/>paper decisions"] --> API
+  BT["backtest.jsonl<br/>price + decision points + reasons"] --> API
+  API["axum bin src/bin/web.rs<br/>GET /api/events · /api/backtest (read-only)"] --> FE
+  RS["ts-rs — derive on DTOs<br/>→ generate .ts types"] -.-> API
+  RS -.-> FE
+  FE["React+Vite SPA"] --> C["price chart + ▲buy/▼sell markers<br/>(lightweight-charts) + equity curve"]
+  FE --> D["decision detail on click<br/>score · RSI · action/qty · LLM analyst+decision text"]
+```
+
+- **Chart**: `lightweight-charts` price line/candles with `setMarkers` for buy (▲ green,
+  below bar) / sell (▼ red, above bar); a second pane/series for the equity curve.
+- **Decision drill-down**: markers and a decisions table are linked to the same records;
+  selecting one shows the full signal + LLM reasoning — answers "每条 signal LLM 怎么选的".
+- **JS/TS over Rust/WASM** for the chart ecosystem; `ts-rs` generates the TS types from
+  the Rust DTO structs, so there's still one source of truth across the boundary.
+- **v1 reads the JSONL files** (memory-mode trail + backtest output) — no Scylla query
+  seam yet. Reading Scylla later = add a `Store` read method; the SPA is unchanged.
+- **Read-only**: the dashboard never places orders; it only displays persisted decisions.
+
+---
+
+## 8. Extend / roadmap (what we can add)
 
 | Add | Trigger | Effort | Notes |
 |---|---|---|---|
@@ -141,25 +209,27 @@ mode. (Grafana/Scylla-Monitoring is ops metrics, not row browsing.)
 | **Multi-strategy** | >1 strategy | small | config already a list; loop all + one paper account (or `strategy_id` tag) each |
 | **Learning loop** | want "越做越好" | medium | `decision_id` exists → add async **outcome** rows (t+1/5/20d P&L) → **L0** pure-Rust eval (hit-rate vs buy-hold) → tune prompt/weights → L2 few-shot RAG |
 | **Sentiment + Risk agents** | richer decisions | medium | new steps between Analyst and Decision; fetches are tool-ready (LLM tool-use is additive) |
-| **Web dashboard** | want to browse decisions | medium | read-only over `events`; dropped for now |
+| **Dashboard reads Scylla** | outgrow JSONL files | small | §7 SPA is unchanged; add a `Store` read method behind the axum API |
 | **SQL/QuestDB analytics** | eval outgrows Rust-over-a-partition | deferred | Scylla is weak at aggregation; add only then |
 
 ---
 
-## 7. Layout
+## 9. Layout
 
 ```
-Cargo.toml            single package `alpaca-trading-system`, bin `crypto-agent`
+Cargo.toml            single package `alpaca-trading-system`, bin `crypto-agent` (+ `web`)
 db/schema.cql         Scylla keyspace + tables (hand-applied)
 docker-compose.yml    local Scylla
 config/strategies.toml strategies (id, symbols, tempo) — secrets live in .env
 src/
-  main.rs             binary — load config, pick store+LLM, run one cycle/symbol
+  main.rs             binary — load config, pick store+LLM, run one cycle/symbol (or BACKTEST=1)
   lib.rs              declares the layers
   traits.rs           PORTS — BarSource · MarketStream · Broker · Store · LlmClient
+  bin/web.rs          read-only axum API (§7) — GET /api/events · /api/backtest
   domain/             types · error · signals + data (dep-free math) · config (TOML+env, live barrier)
   infra/              PORT IMPLS — alpaca (REST+WS) · store (Scylla) · memstore · llm (Claude+Bedrock)
-  engine/             OVER THE PORTS — pipeline (agents+WAL) · guards · ingest (tokio stream)
+  engine/             OVER THE PORTS — pipeline (agents+WAL) · guards · ingest · backtest (§6)
+frontend/             React+Vite SPA (§7) — price chart + markers + decision drill-down; ts-rs types
 ```
 
 **Not doing yet:** agent framework · fine-tuning · per-trade human gate (paper runs
