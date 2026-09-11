@@ -66,6 +66,9 @@ impl LlmClient for Claude {
             "system": system,
             "messages": [{ "role": "user", "content": user }],
         });
+        // The exact wire payload (prompt included). API key is a header, never here, so
+        // this is safe to log. See with RUST_LOG=alpaca_trading_system::infra::llm=debug.
+        tracing::debug!(model = %self.model, request = %body, "anthropic request");
         let resp = self
             .http
             .post(format!("{API_BASE}/v1/messages"))
@@ -152,6 +155,9 @@ impl LlmClient for Bedrock {
             "messages": [{ "role": "user", "content": [{ "text": user }] }],
             "inferenceConfig": { "maxTokens": MAX_TOKENS },
         });
+        // The exact wire payload (prompt included). Bearer key is a header, never here, so
+        // this is safe to log. See with RUST_LOG=alpaca_trading_system::infra::llm=debug.
+        tracing::debug!(model = %self.model, %url, request = %body, "bedrock converse request");
         let resp = self
             .http
             .post(url)
