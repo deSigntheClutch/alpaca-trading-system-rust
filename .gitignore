@@ -4,3 +4,5 @@
 Cargo.lock.web
 .env
 *.log
+# Runtime artifacts (event trail, WAL fallback) — data, not source.
+*.jsonl
