@@ -11,10 +11,9 @@ use alpaca_trading_system::domain::config::{Config, Strategy};
 use alpaca_trading_system::domain::types::{Side, Symbol};
 use alpaca_trading_system::engine::backtest::{self, BacktestConfig};
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
-use alpaca_trading_system::infra::alpaca::AlpacaRest;
+use alpaca_trading_system::infra::dal::{MemStore, ScyllaStore};
+use alpaca_trading_system::infra::exchange::AlpacaRest;
 use alpaca_trading_system::infra::llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
-use alpaca_trading_system::infra::memstore::MemStore;
-use alpaca_trading_system::infra::store::ScyllaStore;
 use alpaca_trading_system::traits::{BarSource, LlmClient, Store};
 use rust_decimal::Decimal;
 

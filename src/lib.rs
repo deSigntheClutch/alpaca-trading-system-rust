@@ -10,5 +10,5 @@
 
 pub mod domain; // types, errors, indicator math, config
 pub mod engine;
-pub mod infra; // port implementations (alpaca / store / llm)
+pub mod infra; // port implementations (exchange / dal / llm)
 pub mod traits; // ports — the seams infra implements and engine consumes // orchestration over the ports (ingest / pipeline / guards)
