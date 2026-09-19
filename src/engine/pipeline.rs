@@ -9,17 +9,9 @@ use serde_json::{json, Value};
 use crate::domain::error::PipelineError;
 use crate::domain::signals;
 use crate::domain::types::{Action, Decision, OrderRequest, Position, Side, Symbol};
+use crate::engine::agents::{analyst::Analyst, trader::Trader};
 use crate::engine::guards::{self, GuardConfig};
 use crate::traits::{BarSource, Broker, LlmClient, Store};
-
-const ANALYST_SYS: &str = "You are a crypto market analyst. Given a technical signal \
-and recent prices, write 2-3 sentences on the setup. Be concise and non-committal about \
-risk. This is educational, not investment advice.";
-
-const DECIDE_SYS: &str = "You are a disciplined crypto trader. Given an analysis and \
-signal, decide an action. Respond with ONLY a JSON object: \
-{\"action\":\"BUY|SELL|HOLD\",\"qty\":<number>,\"score\":<-1..1>,\"reason\":\"...\"}. \
-qty is in units of the base asset. Prefer HOLD when uncertain.";
 
 pub struct PipelineConfig {
     pub strategy_id: String,
@@ -33,13 +25,16 @@ pub struct PipelineConfig {
     pub force_side: Option<Side>,
 }
 
-/// Orchestrates one decision cycle for one symbol over the four ports.
+/// Orchestrates one decision cycle for one symbol over the four ports. Holds the agents
+/// it runs (analyst → trader); the ports are the seams, the agents are the LLM roles.
 pub struct Pipeline<B, L, S, K> {
     bars: B,
     llm: L,
     store: S,
     broker: K,
     cfg: PipelineConfig,
+    analyst: Analyst,
+    trader: Trader,
 }
 
 impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
@@ -50,6 +45,8 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
             store,
             broker,
             cfg,
+            analyst: Analyst,
+            trader: Trader,
         }
     }
 
@@ -127,11 +124,10 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         .await;
 
         // 3. analyst agent.
-        let analyst_user = format!(
-            "Symbol {symbol}\nLast close: {last_close}\nSignal score: {:.3} (RSI {:.1})\nRecent closes: {:?}",
-            sig.score, sig.rsi, tail(&closes, 10),
-        );
-        let analysis = self.llm.message(ANALYST_SYS, &analyst_user).await?;
+        let analysis = self
+            .analyst
+            .run(&self.llm, symbol, last_close, &sig, tail(&closes, 10))
+            .await?;
         self.append(
             symbol,
             ts,
@@ -146,13 +142,18 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         let position_qty = position_qty_for(&positions, symbol);
         let buying_power = self.broker.buying_power().await?;
 
-        // 5. decision agent → strict JSON (parse failure ⇒ Hold).
-        let decide_user = format!(
-            "Analysis:\n{analysis}\n\nSignal score: {:.3}\nPosition qty: {position_qty}\nBuying power: {buying_power}\nRespond with ONLY the JSON object.",
-            sig.score,
-        );
-        let raw = self.llm.message(DECIDE_SYS, &decide_user).await?;
-        let decision = parse_decision(symbol, &raw);
+        // 5. trader agent → strict JSON (parse failure ⇒ Hold, inside the agent).
+        let (decision, raw) = self
+            .trader
+            .run(
+                &self.llm,
+                symbol,
+                &analysis,
+                sig.score,
+                position_qty,
+                buying_power,
+            )
+            .await?;
         self.append(symbol, ts, "decision", &decision_id, &json!({"raw": raw}))
             .await;
 
@@ -271,56 +272,6 @@ fn position_qty_for(positions: &[Position], symbol: &Symbol) -> Decimal {
 
 fn norm(s: &str) -> String {
     s.replace('/', "").to_ascii_uppercase()
-}
-
-/// Parse the decision agent's reply. Tolerant of prose around the JSON; ANY failure
-/// (bad JSON, missing/unknown action) collapses to Hold — never a rogue order.
-fn parse_decision(symbol: &Symbol, raw: &str) -> Decision {
-    let v: Value = match serde_json::from_str(extract_json(raw)) {
-        Ok(v) => v,
-        Err(_) => return hold(symbol, "decision JSON parse failed"),
-    };
-    let action = match v
-        .get("action")
-        .and_then(Value::as_str)
-        .map(|s| s.to_ascii_uppercase())
-        .as_deref()
-    {
-        Some("BUY") => Action::Buy,
-        Some("SELL") => Action::Sell,
-        Some("HOLD") => Action::Hold,
-        _ => return hold(symbol, "missing/invalid action"),
-    };
-    Decision {
-        symbol: symbol.clone(),
-        action,
-        qty: parse_decimal(v.get("qty")),
-        score: v.get("score").and_then(Value::as_f64).unwrap_or(0.0),
-        reason: v
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-    }
-}
-
-/// Slice from the first `{` to the last `}` — strips code fences / prose.
-fn extract_json(s: &str) -> &str {
-    match (s.find('{'), s.rfind('}')) {
-        (Some(a), Some(b)) if b > a => &s[a..=b],
-        _ => s,
-    }
-}
-
-fn parse_decimal(v: Option<&Value>) -> Decimal {
-    match v {
-        Some(Value::String(s)) => s.parse().unwrap_or_default(),
-        Some(Value::Number(n)) => n
-            .as_f64()
-            .and_then(Decimal::from_f64_retain)
-            .unwrap_or_default(),
-        _ => Decimal::ZERO,
-    }
 }
 
 #[cfg(test)]
