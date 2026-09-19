@@ -15,6 +15,18 @@ signal, decide an action. Respond with ONLY a JSON object: \
 {\"action\":\"BUY|SELL|HOLD\",\"qty\":<number>,\"score\":<-1..1>,\"reason\":\"...\"}. \
 qty is in units of the base asset. Prefer HOLD when uncertain.";
 
+/// Everything the trader weighs for one decision. A struct (not a long arg list) so it
+/// stays readable as inputs grow — few-shot memory from `engine::learning` slots in here.
+pub struct TraderInput<'a> {
+    pub symbol: &'a Symbol,
+    pub analysis: &'a str,
+    /// Bull/bear transcript, or empty to skip the debate block entirely.
+    pub debate: &'a str,
+    pub signal_score: f64,
+    pub position_qty: Decimal,
+    pub buying_power: Decimal,
+}
+
 /// The trader role. Unit for now; gains fields (e.g. injected few-shot memory) later.
 #[derive(Default)]
 pub struct Trader;
@@ -25,14 +37,25 @@ impl Trader {
     pub async fn run<L: LlmClient>(
         &self,
         llm: &L,
-        symbol: &Symbol,
-        analysis: &str,
-        signal_score: f64,
-        position_qty: Decimal,
-        buying_power: Decimal,
+        input: TraderInput<'_>,
     ) -> Result<(Decision, String), LlmError> {
+        let TraderInput {
+            symbol,
+            analysis,
+            debate,
+            signal_score,
+            position_qty,
+            buying_power,
+        } = input;
+        // Empty debate ⇒ prompt is byte-identical to the pre-debate trader (backtest/tests
+        // that skip debate see no change); a transcript is folded in as its own block.
+        let debate_block = if debate.is_empty() {
+            String::new()
+        } else {
+            format!("\n\nBull/bear debate:\n{debate}")
+        };
         let user = format!(
-            "Analysis:\n{analysis}\n\nSignal score: {signal_score:.3}\nPosition qty: {position_qty}\nBuying power: {buying_power}\nRespond with ONLY the JSON object.",
+            "Analysis:\n{analysis}{debate_block}\n\nSignal score: {signal_score:.3}\nPosition qty: {position_qty}\nBuying power: {buying_power}\nRespond with ONLY the JSON object.",
         );
         let raw = llm.message(SYSTEM, &user).await?;
         let decision = parse_decision(symbol, &raw);

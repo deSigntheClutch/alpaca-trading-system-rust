@@ -8,4 +8,5 @@
 //! `engine::learning` — both additive, no change to this seam.
 
 pub mod analyst;
+pub mod researcher;
 pub mod trader;

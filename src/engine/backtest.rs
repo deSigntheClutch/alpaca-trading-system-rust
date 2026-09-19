@@ -28,6 +28,9 @@ pub struct BacktestConfig {
     pub starting_cash: f64,
     pub max_notional: Decimal,
     pub days: usize,
+    /// Bull/bear debate rounds per decision day (0 = skip). Mirrors the live pipeline so
+    /// a backtested edge uses the same decision chain; adds 2 LLM calls/round/day to cost.
+    pub debate_rounds: usize,
 }
 
 /// Historical price series + a virtual account, exposing both `BarSource` (what the
@@ -224,6 +227,7 @@ pub async fn run_backtest<L: LlmClient>(
                 strategy_id: "backtest".into(),
                 bar_window: 60,
                 max_notional: cfg.max_notional,
+                debate_rounds: cfg.debate_rounds,
                 force_side: None,
             },
         );
@@ -376,6 +380,7 @@ mod tests {
                 starting_cash: 10_000.0,
                 max_notional: dec!(1000),
                 days: 10,
+                debate_rounds: 0,
             },
         )
         .await;

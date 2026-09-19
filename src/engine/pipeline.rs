@@ -1,7 +1,7 @@
-//! Agent pipeline: bars → signal (pure) → analyst (LLM) → decision (LLM) → guards →
-//! execute → persist every step (WAL — see `execute` for the write ordering). Generic
-//! over the four ports, so the whole flow is testable with fakes — no network, no
-//! database, no live orders.
+//! Agent pipeline: bars → signal (pure) → analyst (LLM) → bull/bear debate (LLM, optional)
+//! → trader (LLM) → guards → execute → persist every step (WAL — see `execute` for the
+//! write ordering). Generic over the four ports, so the whole flow is testable with fakes
+//! — no network, no database, no live orders.
 
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -9,7 +9,11 @@ use serde_json::{json, Value};
 use crate::domain::error::PipelineError;
 use crate::domain::signals;
 use crate::domain::types::{Action, Decision, OrderRequest, Position, Side, Symbol};
-use crate::engine::agents::{analyst::Analyst, trader::Trader};
+use crate::engine::agents::{
+    analyst::Analyst,
+    researcher::Researcher,
+    trader::{Trader, TraderInput},
+};
 use crate::engine::guards::{self, GuardConfig};
 use crate::traits::{BarSource, Broker, LlmClient, Store};
 
@@ -18,6 +22,10 @@ pub struct PipelineConfig {
     /// How many daily bars to pull for the signal window (needs ≥20).
     pub bar_window: usize,
     pub max_notional: Decimal,
+    /// Bull/bear debate rounds between the analyst and the trader. `0` skips the debate
+    /// entirely (analyst → trader, as before). Each round is 2 LLM calls, so this bounds
+    /// cost; the trader reads the full transcript before deciding.
+    pub debate_rounds: usize,
     /// Verification only (`FORCE_SIDE=buy|sell`): skip the signal + LLM and force this
     /// side's order, so the execute + Alpaca paper path can be confirmed end-to-end.
     /// Still clamped by the guards to `max_notional` (set `MAX_NOTIONAL=1` for ~$1).
@@ -34,6 +42,7 @@ pub struct Pipeline<B, L, S, K> {
     broker: K,
     cfg: PipelineConfig,
     analyst: Analyst,
+    researchers: [Researcher; 2],
     trader: Trader,
 }
 
@@ -46,6 +55,7 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
             broker,
             cfg,
             analyst: Analyst,
+            researchers: [Researcher::bull(), Researcher::bear()],
             trader: Trader,
         }
     }
@@ -137,27 +147,51 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         )
         .await;
 
-        // 4. broker truth (positions + cash) for the decision + guards.
+        // 4. bull/bear debate (optional). Each round both sides argue, reacting to the
+        // transcript so far; every turn is a `debate` WAL step so the frontend can show
+        // it. Empty when debate_rounds == 0 ⇒ the trader prompt is unchanged.
+        let mut debate = String::new();
+        for _round in 0..self.cfg.debate_rounds {
+            for r in &self.researchers {
+                let turn = r
+                    .argue(&self.llm, symbol, &analysis, &sig, &debate)
+                    .await?;
+                self.append(
+                    symbol,
+                    ts,
+                    "debate",
+                    &decision_id,
+                    &json!({"stance": r.stance(), "text": turn}),
+                )
+                .await;
+                debate.push_str(&format!("[{}] {turn}\n", r.stance()));
+            }
+        }
+
+        // 5. broker truth (positions + cash) for the decision + guards.
         let positions = self.broker.positions().await?;
         let position_qty = position_qty_for(&positions, symbol);
         let buying_power = self.broker.buying_power().await?;
 
-        // 5. trader agent → strict JSON (parse failure ⇒ Hold, inside the agent).
+        // 6. trader agent → strict JSON (parse failure ⇒ Hold, inside the agent).
         let (decision, raw) = self
             .trader
             .run(
                 &self.llm,
-                symbol,
-                &analysis,
-                sig.score,
-                position_qty,
-                buying_power,
+                TraderInput {
+                    symbol,
+                    analysis: &analysis,
+                    debate: &debate,
+                    signal_score: sig.score,
+                    position_qty,
+                    buying_power,
+                },
             )
             .await?;
         self.append(symbol, ts, "decision", &decision_id, &json!({"raw": raw}))
             .await;
 
-        // 6. guards — the last clamp before a real order.
+        // 7. guards — the last clamp before a real order.
         let guarded = guards::apply(
             decision,
             position_qty,
@@ -170,7 +204,7 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded))
             .await;
 
-        // 7. execute.
+        // 8. execute.
         self.execute(symbol, ts, &decision_id, guarded).await
     }
 
@@ -375,6 +409,7 @@ mod tests {
                 strategy_id: "test".into(),
                 bar_window: 60,
                 max_notional: dec!(100),
+                debate_rounds: 0,
                 force_side: None,
             },
         );
@@ -415,6 +450,7 @@ mod tests {
                 strategy_id: "test".into(),
                 bar_window: 60,
                 max_notional: dec!(100),
+                debate_rounds: 0,
                 force_side: Some(Side::Buy),
             },
         );
@@ -425,5 +461,63 @@ mod tests {
         assert_eq!(d.action, Action::Buy);
         assert_eq!(d.qty, dec!(2));
         assert_eq!(*pipe.broker.submitted_qty.lock().unwrap(), Some(dec!(2)));
+    }
+
+    // Records every system prompt seen, and the user message the trader (JSON) call got.
+    // Prose for the analyst/researchers, strict JSON for the trader.
+    #[derive(Default)]
+    struct RecordingLlm {
+        trader_user: Mutex<String>,
+    }
+    #[async_trait]
+    impl LlmClient for RecordingLlm {
+        async fn message(&self, system: &str, user: &str) -> Result<String, LlmError> {
+            if system.contains("JSON") {
+                *self.trader_user.lock().unwrap() = user.to_string();
+                Ok(r#"{"action":"BUY","qty":10,"score":0.8,"reason":"test"}"#.into())
+            } else {
+                Ok("prose".into())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn debate_runs_both_sides_and_trader_sees_transcript() {
+        let pipe = Pipeline::new(
+            FakeBars,
+            RecordingLlm::default(),
+            FakeStore::default(),
+            FakeBroker::default(),
+            PipelineConfig {
+                strategy_id: "test".into(),
+                bar_window: 60,
+                max_notional: dec!(100),
+                debate_rounds: 1,
+                force_side: None,
+            },
+        );
+
+        let d = pipe.run_symbol(&Symbol::from("BTC/USD")).await.unwrap();
+        assert_eq!(d.action, Action::Buy);
+
+        // One round ⇒ exactly two debate turns persisted (bull + bear).
+        let debates = pipe
+            .store
+            .steps
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| *s == "debate")
+            .count();
+        assert_eq!(debates, 2, "one round = bull + bear");
+
+        // The trader's prompt carried the full transcript.
+        let trader_user = pipe.llm.trader_user.lock().unwrap();
+        assert!(
+            trader_user.contains("Bull/bear debate:")
+                && trader_user.contains("[bull]")
+                && trader_user.contains("[bear]"),
+            "trader must see the debate transcript — {trader_user}"
+        );
     }
 }

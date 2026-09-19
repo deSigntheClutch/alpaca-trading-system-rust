@@ -123,6 +123,15 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Walk-forward backtest each symbol over history and append one `BacktestResult`
+/// Bull/bear debate rounds from `DEBATE_ROUNDS` (default 1; 0 disables the debate). Each
+/// round is 2 extra LLM calls per decision, so it directly drives cost — hence env-tunable.
+fn debate_rounds() -> usize {
+    std::env::var("DEBATE_ROUNDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
+}
+
 /// JSON line per symbol to `backtest.jsonl` (for the dashboard). Reuses the live
 /// pipeline via `engine::backtest`; no live orders are placed. `BACKTEST_DAYS`
 /// (default 90) caps how many recent days get a decision — each day = 2 LLM calls.
@@ -161,6 +170,7 @@ async fn run_backtest_all<L: LlmClient>(
                 starting_cash: 10_000.0,
                 max_notional,
                 days,
+                debate_rounds: debate_rounds(),
             },
         )
         .await;
@@ -242,6 +252,7 @@ async fn run_strategy<L: LlmClient, S: Store>(
                 strategy_id: strat.id.clone(),
                 bar_window: 60,
                 max_notional,
+                debate_rounds: debate_rounds(),
                 force_side,
             },
         );
