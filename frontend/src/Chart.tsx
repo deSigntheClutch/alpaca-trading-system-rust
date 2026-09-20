@@ -7,20 +7,25 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
-import type { DayRecord } from './bindings/DayRecord'
+import type { DayRecord } from './api/types'
 
 type Props = {
   days: DayRecord[]
   startingCash: number
-  /** called with the clicked day's ts in EPOCH MILLIS (the DayRecord key) */
-  onSelect: (tsMillis: number) => void
+  /**
+   * Called with the clicked day's ts in epoch millis, which is the `DayRecord`
+   * key. Optional: the chart stands alone in FE-1, and FE-2 (#56) uses this to
+   * keep the chart and the trade table selecting the same record.
+   */
+  onSelect?: (tsMillis: number) => void
+  /** Highlighted day, so an external selection draws a marker here too. */
+  selectedTs?: number | null
 }
 
-// ts-rs types ts as bigint (Rust i64) but serde sends a JSON number, so at runtime
-// it's a JS number; Number() handles both. lightweight-charts wants UTC seconds.
-const toSecs = (ts: number | bigint) => (Number(ts) / 1000) as UTCTimestamp
+// lightweight-charts wants UTC seconds; the wire carries epoch millis.
+const toSecs = (ts: number) => (ts / 1000) as UTCTimestamp
 
-export function Chart({ days, startingCash, onSelect }: Props) {
+export function Chart({ days, startingCash, onSelect, selectedTs }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
@@ -36,10 +41,11 @@ export function Chart({ days, startingCash, onSelect }: Props) {
       rightPriceScale: { borderColor: '#ccc' },
       leftPriceScale: { visible: true, borderColor: '#ccc' },
       timeScale: { borderColor: '#ccc' },
+      crosshair: { mode: 1 },
     })
 
     // lightweight-charts requires strictly ascending, unique times.
-    const sorted = [...days].sort((a, b) => Number(a.ts) - Number(b.ts))
+    const sorted = [...days].sort((a, b) => a.ts - b.ts)
 
     const price = chart.addLineSeries({ color: '#2962FF', lineWidth: 2, priceScaleId: 'right' })
     price.setData(sorted.map((d) => ({ time: toSecs(d.ts), value: d.close })))
@@ -61,21 +67,34 @@ export function Chart({ days, startingCash, onSelect }: Props) {
       title: 'start',
     })
 
-    // Buy ▲ below bar (green), Sell ▼ above bar (red); Hold → no marker.
+    // Buy ▲ below bar (green), Sell ▼ above bar (red); Hold gets no marker.
     const markers: SeriesMarker<Time>[] = sorted
       .filter((d) => d.action === 'Buy' || d.action === 'Sell')
-      .map((d): SeriesMarker<Time> =>
-        d.action === 'Buy'
-          ? { time: toSecs(d.ts), position: 'belowBar', color: '#26a69a', shape: 'arrowUp', text: `B ${d.qty}` }
-          : { time: toSecs(d.ts), position: 'aboveBar', color: '#ef5350', shape: 'arrowDown', text: `S ${d.qty}` },
-      )
+      .map((d): SeriesMarker<Time> => {
+        const on = selectedTs === d.ts
+        return d.action === 'Buy'
+          ? {
+              time: toSecs(d.ts),
+              position: 'belowBar',
+              color: on ? '#0b6b5f' : '#26a69a',
+              shape: 'arrowUp',
+              text: `B ${fmtQty(d.qty)}`,
+            }
+          : {
+              time: toSecs(d.ts),
+              position: 'aboveBar',
+              color: on ? '#a52a26' : '#ef5350',
+              shape: 'arrowDown',
+              text: `S ${fmtQty(d.qty)}`,
+            }
+      })
     price.setMarkers(markers)
     chart.timeScale().fitContent()
 
-    // Click anywhere → snap to the nearest data point → report its ms ts, so a marker
-    // click and a table-row click select the exact same DayRecord.
+    // Click anywhere, snap to the nearest data point, report its millis ts, so a
+    // marker click and a table row click select the exact same record.
     const secsToMs = new Map<number, number>()
-    sorted.forEach((d) => secsToMs.set(Number(toSecs(d.ts)), Number(d.ts)))
+    sorted.forEach((d) => secsToMs.set(Number(toSecs(d.ts)), d.ts))
     const times = [...secsToMs.keys()]
     chart.subscribeClick((param) => {
       if (param.time == null || times.length === 0) return
@@ -83,7 +102,7 @@ export function Chart({ days, startingCash, onSelect }: Props) {
       let best = times[0]
       for (const s of times) if (Math.abs(s - t) < Math.abs(best - t)) best = s
       const ms = secsToMs.get(best)
-      if (ms != null) onSelectRef.current(ms)
+      if (ms != null) onSelectRef.current?.(ms)
     })
 
     const ro = new ResizeObserver((entries) => {
@@ -96,7 +115,13 @@ export function Chart({ days, startingCash, onSelect }: Props) {
       ro.disconnect()
       chart.remove()
     }
-  }, [days, startingCash])
+  }, [days, startingCash, selectedTs])
 
   return <div ref={containerRef} style={{ width: '100%' }} />
+}
+
+/** Crypto quantities are fractional; stock quantities usually are not. */
+function fmtQty(q: number): string {
+  if (q === 0) return '0'
+  return q >= 1 ? q.toFixed(2) : q.toPrecision(3)
 }

@@ -1,156 +1,162 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { BacktestResult } from './bindings/BacktestResult'
+/**
+ * FE-1 (#51): run controls, the price chart with buy and sell markers, and the
+ * equity curve.
+ *
+ * The per-trade table, the decision drill-down and the full metric cards are
+ * FE-2 (#56), so the area below the chart is deliberately thin for now. The
+ * selection state and the `onSelect` wiring already exist here because FE-2
+ * binds the table and the chart to the same record.
+ */
+import { useCallback, useEffect, useState } from 'react'
 import { Chart } from './Chart'
+import { RunControls } from './RunControls'
+import { runBacktest, usingFixtures } from './api/client'
+import type { BacktestResult, RunRequest, RunStatus } from './api/types'
+
+const DEFAULT_REQUEST: RunRequest = {
+  symbols: ['NVDA'],
+  context_symbols: ['MU', 'SPY'],
+  days: 90,
+  starting_cash: 10_000,
+  arm: 'rule',
+  fee_bps: 25,
+  slippage_bps: 5,
+}
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`
-const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 
 export function App() {
+  const [request, setRequest] = useState<RunRequest>(DEFAULT_REQUEST)
   const [results, setResults] = useState<BacktestResult[]>([])
   const [symbol, setSymbol] = useState('')
   const [selectedTs, setSelectedTs] = useState<number | null>(null)
+  const [status, setStatus] = useState<RunStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
 
-  useEffect(() => {
-    fetch('/api/backtest')
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then((data: BacktestResult[]) => {
-        setResults(data)
-        if (data.length) setSymbol(data[0].symbol)
-      })
-      .catch((e) => setError(String(e)))
+  const run = useCallback(async (req: RunRequest) => {
+    setRunning(true)
+    setError(null)
+    setSelectedTs(null)
+    try {
+      const out = await runBacktest(req, setStatus)
+      setResults(out)
+      setSymbol((prev) => (out.some((r) => r.symbol === prev) ? prev : out[0]?.symbol ?? ''))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setResults([])
+    } finally {
+      setRunning(false)
+      setStatus(null)
+    }
   }, [])
 
-  const current = useMemo(() => results.find((r) => r.symbol === symbol) ?? null, [results, symbol])
-  const selected = useMemo(() => {
-    if (!current || selectedTs == null) return null
-    return current.days.find((d) => Number(d.ts) === selectedTs) ?? null
-  }, [current, selectedTs])
-  const trades = useMemo(() => (current?.days ?? []).filter((d) => d.action !== 'Hold'), [current])
+  // One run on load, so the page is never empty.
+  useEffect(() => {
+    void run(DEFAULT_REQUEST)
+  }, [run])
 
-  if (error)
-    return (
-      <div className="pad">
-        Failed to load <code>/api/backtest</code>: {error}. Is the web server running, and is{' '}
-        <code>backtest.jsonl</code> present?
-      </div>
-    )
-  if (!results.length)
-    return (
-      <div className="pad">
-        No backtest results yet — run <code>BACKTEST=1 cargo run</code> to produce{' '}
-        <code>backtest.jsonl</code>, then start <code>cargo run --bin web</code>.
-      </div>
-    )
+  const current = results.find((r) => r.symbol === symbol) ?? null
 
   return (
     <div className="pad">
-      <header className="row">
-        <h1>Trading Decisions</h1>
-        <select
-          value={symbol}
-          onChange={(e) => {
-            setSymbol(e.target.value)
-            setSelectedTs(null)
-          }}
-        >
-          {results.map((r) => (
-            <option key={r.symbol} value={r.symbol}>
-              {r.symbol}
-            </option>
-          ))}
-        </select>
+      <header className="row head">
+        <h1>Backtest</h1>
+        {usingFixtures && (
+          <span className="badge" title="No backend is being called. Numbers here are synthetic.">
+            synthetic data
+          </span>
+        )}
       </header>
+
+      {usingFixtures && (
+        <p className="hint">
+          These results are generated in the browser, not by the trading engine. They exist so the page
+          can be built and reviewed before the run API (#50) is written. Run with{' '}
+          <code>VITE_USE_FIXTURES=false</code> once that endpoint exists.
+        </p>
+      )}
+
+      <RunControls
+        value={request}
+        onChange={setRequest}
+        onRun={() => void run(request)}
+        running={running}
+      />
+
+      {status && (
+        <p className="hint">
+          {status.message}
+          {status.progress != null ? ` — ${Math.round(status.progress * 100)}%` : ''}
+        </p>
+      )}
+
+      {error && (
+        <div className="error">
+          Backtest failed: {error}
+        </div>
+      )}
+
+      {results.length > 1 && (
+        <div className="seg tabs">
+          {results.map((r) => (
+            <button
+              key={r.symbol}
+              type="button"
+              className={r.symbol === symbol ? 'on' : ''}
+              onClick={() => {
+                setSymbol(r.symbol)
+                setSelectedTs(null)
+              }}
+            >
+              {r.symbol}
+            </button>
+          ))}
+        </div>
+      )}
 
       {current && (
         <>
-          <div className="cards">
-            <Stat label="Total return" value={pct(current.total_return)} good={current.total_return >= 0} />
-            <Stat label="Buy & hold" value={pct(current.buy_hold_return)} good={current.buy_hold_return >= 0} />
-            <Stat label="Max drawdown" value={pct(current.max_drawdown)} good={false} />
-            <Stat label="Trades" value={String(current.num_trades)} />
+          <div className="row summary">
+            <strong>{current.symbol}</strong>
+            <span className={current.metrics.total_return >= 0 ? 'buy' : 'sell'}>
+              {pct(current.metrics.total_return)} net
+            </span>
+            <span className="dim">
+              buy and hold {pct(current.metrics.buy_hold_return)}
+            </span>
+            <span className="dim">{current.metrics.num_trades} closed trades</span>
+            <span className="dim">exposure {pct(current.metrics.exposure)}</span>
+            {current.config.context_symbols.length > 0 && (
+              <span className="dim">context: {current.config.context_symbols.join(', ')}</span>
+            )}
           </div>
 
           <p className="hint">
-            Blue = price (▲ buy / ▼ sell). Purple dashed = equity (dotted line = starting cash). Click a marker
-            or a row to see the signal and the LLM's reasoning.
+            Blue is price, with ▲ for a buy and ▼ for a sell. Purple dashed is equity on its own scale,
+            and the dotted line is starting cash.
           </p>
 
-          <Chart days={current.days} startingCash={current.starting_cash} onSelect={setSelectedTs} />
+          <Chart
+            days={current.days}
+            startingCash={current.starting_cash}
+            onSelect={setSelectedTs}
+            selectedTs={selectedTs}
+          />
 
-          <div className="grid">
-            <div>
-              <h3>Decisions ({trades.length})</h3>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Action</th>
-                    <th>Qty</th>
-                    <th>Score</th>
-                    <th>RSI</th>
-                    <th>Close</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trades.map((d) => {
-                    const ms = Number(d.ts)
-                    return (
-                      <tr key={ms} className={selectedTs === ms ? 'sel' : ''} onClick={() => setSelectedTs(ms)}>
-                        <td>{day(ms)}</td>
-                        <td className={d.action === 'Buy' ? 'buy' : 'sell'}>{d.action}</td>
-                        <td>{d.qty}</td>
-                        <td>{d.score.toFixed(3)}</td>
-                        <td>{d.rsi.toFixed(1)}</td>
-                        <td>{d.close.toFixed(2)}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div>
-              <h3>Why this decision</h3>
-              {selected ? (
-                <div className="detail">
-                  <div className="row">
-                    <span className={`tag ${selected.action.toLowerCase()}`}>{selected.action}</span>
-                    <span>{day(Number(selected.ts))}</span>
-                  </div>
-                  <p>
-                    <b>Signal</b> — score {selected.score.toFixed(3)} · RSI {selected.rsi.toFixed(1)} · close{' '}
-                    {selected.close.toFixed(2)} · qty {selected.qty}
-                  </p>
-                  <p>
-                    <b>Decision:</b> {selected.decision_reason || '—'}
-                  </p>
-                  <p>
-                    <b>Analyst:</b>
-                  </p>
-                  <pre>{selected.analyst_text || '—'}</pre>
-                </div>
-              ) : (
-                <p className="hint">Select a point to see the LLM's analysis and decision.</p>
-              )}
-            </div>
+          <div className="placeholder">
+            FE-2 (#56) goes here: the per-trade table with net P&amp;L, the decision drill-down showing
+            the signal and the LLM's own words, and the full metric cards.
+            {selectedTs != null && (
+              <> Selected day: <code>{new Date(selectedTs).toISOString().slice(0, 10)}</code>.</>
+            )}
           </div>
         </>
       )}
-    </div>
-  )
-}
 
-function Stat({ label, value, good }: { label: string; value: string; good?: boolean }) {
-  return (
-    <div className="card">
-      <div className="card-label">{label}</div>
-      <div className="card-value" style={good == null ? undefined : { color: good ? '#1a7f37' : '#cf222e' }}>
-        {value}
-      </div>
+      {!current && !running && !error && (
+        <p className="hint">No results. Add a symbol and press Run.</p>
+      )}
     </div>
   )
 }

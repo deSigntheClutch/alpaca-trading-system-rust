@@ -1,0 +1,85 @@
+/**
+ * The only place the SPA talks to the outside world.
+ *
+ * Today it serves synthetic results, because the Rust endpoints do not exist yet
+ * (BT-7 #50). The real path is written out in full below, so when the backend
+ * lands the switch is one environment variable and this file stops being
+ * interesting:
+ *
+ *     VITE_USE_FIXTURES=false npm run dev
+ *
+ * The real flow is asynchronous on purpose. The rule arm answers in
+ * milliseconds, but an LLM arm runs for minutes, so a run is started, polled,
+ * and then fetched. Fixtures follow the same three steps with an artificial
+ * delay, so the loading and progress states are exercised during development
+ * rather than discovered later.
+ */
+import { fixtureRun } from './fixtures'
+import type { BacktestResult, RunRequest, RunStatus, RunSummary } from './types'
+
+const USE_FIXTURES = import.meta.env.VITE_USE_FIXTURES !== 'false'
+
+/** Rough LLM call count for a request, mirroring the estimate BT-7 enforces. */
+export function estimateLlmCalls(req: RunRequest): number {
+  if (req.arm === 'rule') return 0
+  const rounds = req.arm === 'llm+debate' ? 1 : 0
+  const days = req.days ?? 90
+  return req.symbols.length * days * (2 + 2 * rounds)
+}
+
+async function json<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`)
+  }
+  return res.json() as Promise<T>
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Start a run and resolve once it finishes.
+ *
+ * `onProgress` is called as the backend reports it, so a long LLM run shows
+ * movement instead of a frozen spinner.
+ */
+export async function runBacktest(
+  req: RunRequest,
+  onProgress?: (s: RunStatus) => void,
+): Promise<BacktestResult[]> {
+  if (USE_FIXTURES) {
+    const runId = `fixture_${Date.now().toString(36)}`
+    onProgress?.({ run_id: runId, state: 'running', progress: 0.4, message: 'simulating (fixture data)' })
+    await sleep(250)
+    const out = fixtureRun(req)
+    onProgress?.({ run_id: runId, state: 'done', progress: 1, message: 'done' })
+    return out
+  }
+
+  const started = await json<{ run_id: string }>(
+    await fetch('/api/backtest/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    }),
+  )
+
+  // Poll until terminal. The rule arm is usually done on the first check.
+  for (;;) {
+    const status = await json<RunStatus>(await fetch(`/api/backtest/runs/${started.run_id}/status`))
+    onProgress?.(status)
+    if (status.state === 'done') break
+    if (status.state === 'error') throw new Error(status.message || 'run failed')
+    await sleep(1000)
+  }
+
+  return json<BacktestResult[]>(await fetch(`/api/backtest/runs/${started.run_id}`))
+}
+
+/** Past runs, newest first. Empty while fixtures are in use. */
+export async function listRuns(): Promise<RunSummary[]> {
+  if (USE_FIXTURES) return []
+  return json<RunSummary[]>(await fetch('/api/backtest/runs'))
+}
+
+export const usingFixtures = USE_FIXTURES
