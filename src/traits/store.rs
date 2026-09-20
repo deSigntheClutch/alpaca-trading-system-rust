@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use crate::domain::error::StoreError;
-use crate::domain::types::{Bar, Symbol};
+use crate::domain::types::{Bar, Event, Symbol};
 
 /// Append-only event log + market-data store. impl #1 = ScyllaDB (+ local-file
 /// fallback); QuestDB analytics is the upgrade path.
@@ -20,6 +20,15 @@ pub trait Store: Send + Sync {
 
     /// Bulk-persist bars/ticks into the market-data firehose table.
     async fn write_bars(&self, bars: &[Bar]) -> Result<(), StoreError>;
+
+    /// Read the full event history for one `(strategy, symbol)` partition, oldest-first.
+    /// Partition-local (matches the events PK), so it never triggers a cross-partition
+    /// scan. The learning loop reads these back to compute outcomes + score decisions.
+    async fn read_events(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+    ) -> Result<Vec<Event>, StoreError>;
 }
 
 #[async_trait]
@@ -39,5 +48,12 @@ impl<T: Store + ?Sized> Store for &T {
     }
     async fn write_bars(&self, bars: &[Bar]) -> Result<(), StoreError> {
         (**self).write_bars(bars).await
+    }
+    async fn read_events(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+    ) -> Result<Vec<Event>, StoreError> {
+        (**self).read_events(strategy_id, symbol).await
     }
 }

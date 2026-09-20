@@ -17,7 +17,7 @@ use scylla::value::{CqlDate, CqlTimestamp};
 use serde::Deserialize;
 
 use crate::domain::error::StoreError;
-use crate::domain::types::{Bar, Symbol};
+use crate::domain::types::{Bar, Event, Symbol};
 use crate::traits::Store;
 
 const MS_PER_DAY: i64 = 86_400_000;
@@ -191,6 +191,42 @@ impl Store for ScyllaStore {
                 .map_err(|e| StoreError::Write(e.to_string()))?;
         }
         Ok(())
+    }
+
+    /// Single-partition read (PK is `(strategy_id, symbol)`), so no cross-partition scan.
+    /// Not prepared — the learning loop runs it rarely, not on the decision hot path.
+    /// Clustering is `ts DESC`; we sort back to oldest-first for the learning loop.
+    async fn read_events(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+    ) -> Result<Vec<Event>, StoreError> {
+        const READ_EVENTS_CQL: &str = "SELECT ts, step, decision_id, payload \
+             FROM trading.events WHERE strategy_id = ? AND symbol = ?";
+        let result = self
+            .session
+            .query_unpaged(READ_EVENTS_CQL, (strategy_id, symbol.as_str()))
+            .await
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let rows = result
+            .into_rows_result()
+            .map_err(|e| StoreError::Query(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows
+            .rows::<(CqlTimestamp, String, String, String)>()
+            .map_err(|e| StoreError::Query(e.to_string()))?
+        {
+            let (ts, step, decision_id, payload) =
+                row.map_err(|e| StoreError::Query(e.to_string()))?;
+            out.push(Event {
+                ts: ts.0,
+                step,
+                decision_id,
+                payload,
+            });
+        }
+        out.sort_by_key(|e| e.ts); // stable → oldest-first
+        Ok(out)
     }
 }
 

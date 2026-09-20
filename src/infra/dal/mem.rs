@@ -10,7 +10,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 use crate::domain::error::StoreError;
-use crate::domain::types::{Bar, Symbol};
+use crate::domain::types::{Bar, Event, Symbol};
 use crate::traits::Store;
 
 #[derive(Default)]
@@ -66,5 +66,41 @@ impl Store for MemStore {
 
     async fn write_bars(&self, _bars: &[Bar]) -> Result<(), StoreError> {
         Ok(()) // dropped in memory mode; bars are re-fetchable
+    }
+
+    /// Reads the JSONL trail back (the only history mem mode keeps). No `EVENTS_PATH`
+    /// set ⇒ nothing was persisted ⇒ empty; a missing file ⇒ empty (nothing yet). The
+    /// file is append order = chronological, so no sort is needed.
+    async fn read_events(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+    ) -> Result<Vec<Event>, StoreError> {
+        let Some(path) = &self.path else {
+            return Ok(Vec::new());
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(StoreError::Query(format!("read {path:?}: {e}"))),
+        };
+        let mut out = Vec::new();
+        for line in content.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| StoreError::Query(format!("bad event line: {e}")))?;
+            if v["strategy_id"] == strategy_id && v["symbol"] == symbol.as_str() {
+                out.push(Event {
+                    ts: v["ts"].as_i64().unwrap_or_default(),
+                    step: v["step"].as_str().unwrap_or_default().to_string(),
+                    decision_id: v["decision_id"].as_str().unwrap_or_default().to_string(),
+                    // payload was inlined as JSON when it parsed; give it back as a string.
+                    payload: match &v["payload"] {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    },
+                });
+            }
+        }
+        Ok(out)
     }
 }

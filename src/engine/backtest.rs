@@ -175,6 +175,16 @@ impl Store for CollectingStore {
     async fn write_bars(&self, _bars: &[Bar]) -> Result<(), StoreError> {
         Ok(())
     }
+
+    /// Per-day throwaway store: it only snapshots the current cycle, so there is no
+    /// history to read back. Backtest memory recall would need a persistent store.
+    async fn read_events(
+        &self,
+        _strategy_id: &str,
+        _symbol: &Symbol,
+    ) -> Result<Vec<crate::domain::types::Event>, StoreError> {
+        Ok(Vec::new())
+    }
 }
 
 impl CollectingStore {

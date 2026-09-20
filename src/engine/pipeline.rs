@@ -371,6 +371,13 @@ mod tests {
         async fn write_bars(&self, _bars: &[Bar]) -> Result<(), StoreError> {
             Ok(())
         }
+        async fn read_events(
+            &self,
+            _s: &str,
+            _sym: &Symbol,
+        ) -> Result<Vec<crate::domain::types::Event>, StoreError> {
+            Ok(Vec::new())
+        }
     }
 
     #[derive(Default)]

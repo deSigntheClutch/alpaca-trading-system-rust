@@ -109,3 +109,14 @@ pub struct Order {
     pub symbol: Symbol,
     pub status: String,
 }
+
+/// One row from the append-only events log, read side. Mirrors the persisted columns
+/// (`Store::append_event`); the learning loop reads these back to score past decisions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    pub ts: i64,
+    pub step: String,
+    pub decision_id: String,
+    /// JSON blob, same as written — callers parse the fields they care about.
+    pub payload: String,
+}
