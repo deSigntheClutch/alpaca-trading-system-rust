@@ -72,8 +72,14 @@ export interface DayRecord {
 }
 
 /**
- * A completed or still-open round trip. This is the only source for
+ * One lot: a completed or still-open round trip. This is the only source for
  * "did this trade make money" (BT-2). An open position leaves `exit_*` null.
+ *
+ * Accounting is per lot, FIFO. Each entry opens its own `Trade`, so every buy
+ * marker on the chart maps to exactly one row, and a sell that closes three
+ * lots produces three rows sharing an `exit_ts`. The alternative, blending
+ * scale-ins into a single averaged position, loses the marker-to-row link and
+ * hides the per-entry outcome. Worth matching on the Rust side.
  */
 export interface Trade {
   symbol: string
@@ -98,7 +104,13 @@ export interface Metrics {
   win_rate: number
   avg_win: number
   avg_loss: number
-  profit_factor: number
+  /**
+   * Gross wins over gross losses. `null` when there are no losing trades, which
+   * would otherwise be infinity — and `serde_json` writes non-finite floats as
+   * `null` anyway, so the Rust side must send `Option<f64>` here rather than
+   * `f64::INFINITY`. The UI renders null as ∞ when there were wins.
+   */
+  profit_factor: number | null
   /** Average share of capital deployed, so the benchmark is comparable. */
   exposure: number
   buy_hold_return: number

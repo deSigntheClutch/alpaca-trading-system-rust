@@ -20,12 +20,17 @@ type Props = {
   onSelect?: (tsMillis: number) => void
   /** Highlighted day, so an external selection draws a marker here too. */
   selectedTs?: number | null
+  /**
+   * Text laid over the plot. Used to stamp synthetic data, so the warning
+   * cannot scroll out of view above a chart that otherwise looks like a quote.
+   */
+  watermark?: string
 }
 
 // lightweight-charts wants UTC seconds; the wire carries epoch millis.
 const toSecs = (ts: number) => (ts / 1000) as UTCTimestamp
 
-export function Chart({ days, startingCash, onSelect, selectedTs }: Props) {
+export function Chart({ days, startingCash, onSelect, selectedTs, watermark }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
@@ -117,7 +122,12 @@ export function Chart({ days, startingCash, onSelect, selectedTs }: Props) {
     }
   }, [days, startingCash, selectedTs])
 
-  return <div ref={containerRef} style={{ width: '100%' }} />
+  return (
+    <div className="chart-wrap">
+      <div ref={containerRef} style={{ width: '100%' }} />
+      {watermark && <div className="watermark">{watermark}</div>}
+    </div>
+  )
 }
 
 /** Crypto quantities are fractional; stock quantities usually are not. */

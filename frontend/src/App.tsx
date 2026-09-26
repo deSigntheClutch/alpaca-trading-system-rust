@@ -1,15 +1,20 @@
 /**
- * FE-1 (#51): run controls, the price chart with buy and sell markers, and the
- * equity curve.
+ * The backtest page.
  *
- * The per-trade table, the decision drill-down and the full metric cards are
- * FE-2 (#56), so the area below the chart is deliberately thin for now. The
- * selection state and the `onSelect` wiring already exist here because FE-2
- * binds the table and the chart to the same record.
+ * FE-1 (#51) is the run controls, the price chart with buy and sell markers, and
+ * the equity curve. FE-2 (#56) is the metric cards, the trade table and the
+ * decision drill-down below it.
+ *
+ * Chart and table share one `selectedTs`, so clicking a marker highlights the
+ * trade and clicking a trade moves the drill-down, without either view owning
+ * the selection.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Chart } from './Chart'
+import { DecisionDetail } from './DecisionDetail'
+import { MetricCards } from './MetricCards'
 import { RunControls } from './RunControls'
+import { TradeTable } from './TradeTable'
 import { runBacktest, usingFixtures } from './api/client'
 import type { BacktestResult, RunRequest, RunStatus } from './api/types'
 
@@ -22,8 +27,6 @@ const DEFAULT_REQUEST: RunRequest = {
   fee_bps: 25,
   slippage_bps: 5,
 }
-
-const pct = (x: number) => `${(x * 100).toFixed(2)}%`
 
 export function App() {
   const [request, setRequest] = useState<RunRequest>(DEFAULT_REQUEST)
@@ -57,6 +60,11 @@ export function App() {
   }, [run])
 
   const current = results.find((r) => r.symbol === symbol) ?? null
+  const lastTs = current?.days.length ? current.days[current.days.length - 1].ts : 0
+  const selectedDay = useMemo(
+    () => (current && selectedTs != null ? current.days.find((d) => d.ts === selectedTs) ?? null : null),
+    [current, selectedTs],
+  )
 
   return (
     <div className="pad">
@@ -70,11 +78,13 @@ export function App() {
       </header>
 
       {usingFixtures && (
-        <p className="hint">
-          These results are generated in the browser, not by the trading engine. They exist so the page
-          can be built and reviewed before the run API (#50) is written. Run with{' '}
-          <code>VITE_USE_FIXTURES=false</code> once that endpoint exists.
-        </p>
+        <div className="error warn-box">
+          <strong>These prices are invented, not market data.</strong> The browser makes no network
+          request at all: the series is a random walk seeded from the letters of the ticker, indexed to
+          100 at the start of the window. A real symbol will not show its real price, and the returns
+          here mean nothing. This exists so the page can be built before the bar endpoints (#30, #52)
+          and the run API (#50) are written. Set <code>VITE_USE_FIXTURES=false</code> once those exist.
+        </div>
       )}
 
       <RunControls
@@ -91,11 +101,7 @@ export function App() {
         </p>
       )}
 
-      {error && (
-        <div className="error">
-          Backtest failed: {error}
-        </div>
-      )}
+      {error && <div className="error">Backtest failed: {error}</div>}
 
       {results.length > 1 && (
         <div className="seg tabs">
@@ -117,24 +123,25 @@ export function App() {
 
       {current && (
         <>
-          <div className="row summary">
+          <div className="row runline">
             <strong>{current.symbol}</strong>
-            <span className={current.metrics.total_return >= 0 ? 'buy' : 'sell'}>
-              {pct(current.metrics.total_return)} net
-            </span>
             <span className="dim">
-              buy and hold {pct(current.metrics.buy_hold_return)}
+              {current.config.window_start} to {current.config.window_end}
             </span>
-            <span className="dim">{current.metrics.num_trades} closed trades</span>
-            <span className="dim">exposure {pct(current.metrics.exposure)}</span>
+            <span className="dim">{current.config.arm} arm</span>
+            <span className="dim">
+              {current.config.fee_bps} bps fee · {current.config.slippage_bps} bps slippage
+            </span>
             {current.config.context_symbols.length > 0 && (
               <span className="dim">context: {current.config.context_symbols.join(', ')}</span>
             )}
           </div>
 
+          <MetricCards metrics={current.metrics} />
+
           <p className="hint">
             Blue is price, with ▲ for a buy and ▼ for a sell. Purple dashed is equity on its own scale,
-            and the dotted line is starting cash.
+            and the dotted line is starting cash. Click a marker to read the reasoning behind it.
           </p>
 
           <Chart
@@ -142,14 +149,17 @@ export function App() {
             startingCash={current.starting_cash}
             onSelect={setSelectedTs}
             selectedTs={selectedTs}
+            watermark={usingFixtures ? 'SIMULATED — NOT MARKET DATA' : undefined}
           />
 
-          <div className="placeholder">
-            FE-2 (#56) goes here: the per-trade table with net P&amp;L, the decision drill-down showing
-            the signal and the LLM's own words, and the full metric cards.
-            {selectedTs != null && (
-              <> Selected day: <code>{new Date(selectedTs).toISOString().slice(0, 10)}</code>.</>
-            )}
+          <div className="grid">
+            <TradeTable
+              trades={current.trades}
+              selectedTs={selectedTs}
+              onSelect={setSelectedTs}
+              lastTs={lastTs}
+            />
+            <DecisionDetail day={selectedDay} trades={current.trades} lastTs={lastTs} />
           </div>
         </>
       )}

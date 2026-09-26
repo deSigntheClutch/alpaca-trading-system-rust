@@ -6,3 +6,8 @@ Cargo.lock.web
 *.log
 # Runtime artifacts (event trail, WAL fallback) — data, not source.
 *.jsonl
+
+# local tooling
+.idea/
+.DS_Store
+.mcp.json

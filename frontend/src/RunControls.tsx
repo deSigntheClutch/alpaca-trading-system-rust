@@ -6,7 +6,7 @@
  * the wire format identical means there is no mapping layer to drift.
  */
 import { useState } from 'react'
-import { estimateLlmCalls } from './api/client'
+import { estimateLlmCalls, usingFixtures } from './api/client'
 import type { Arm, RunRequest } from './api/types'
 
 const PRESETS = [30, 90, 180, 365]
@@ -115,6 +115,7 @@ export function RunControls({ value, onChange, onRun, running }: Props) {
           <span className="warn">
             ≈ {calls.toLocaleString()} LLM calls, roughly ${cost}. The rule arm answers instantly and
             costs nothing.
+            {usingFixtures && ' Synthetic results are rule-based whichever arm is picked, so this only changes the estimate.'}
           </span>
         )}
       </div>

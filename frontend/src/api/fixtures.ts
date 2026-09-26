@@ -108,12 +108,36 @@ function calendar(symbol: string, endMs: number, count: number): number[] {
   return out.reverse()
 }
 
-/** Plausible starting level, so BTC is not priced like a small-cap. */
-function basePrice(symbol: string): number {
-  if (symbol.startsWith('BTC')) return 60_000
-  if (symbol.startsWith('ETH')) return 3_000
-  return 40 + (hashString(symbol) % 260)
+/**
+ * Trading days in [start, end] for this symbol.
+ *
+ * A custom range has to be counted on the symbol's own calendar, not in
+ * calendar days. Treating 180 calendar days as 180 trading days would make a
+ * stock window start roughly ten weeks earlier than the user asked for, and the
+ * chart would quietly show a different period than the one in the date box.
+ */
+function tradingDaysBetween(symbol: string, startMs: number, endMs: number): number {
+  let count = 0
+  for (let t = endMs; t >= startMs; t -= MS_PER_DAY) {
+    const dow = new Date(t).getUTCDay()
+    if (isCrypto(symbol) || (dow !== 0 && dow !== 6)) count++
+  }
+  return Math.max(1, count)
 }
+
+/**
+ * Every synthetic series starts at exactly 100.00, deliberately.
+ *
+ * An earlier version derived a "plausible" level from a hash of the ticker, so
+ * RIVN opened at 73.61 and SPY at 206.05. Both are wrong by a wide margin, and
+ * both look enough like a real quote to be believed. Indexing everything to 100
+ * makes the series read as what it is — a shape, not a price — while the
+ * per-symbol drift and volatility below still give each ticker its own
+ * character for testing the UI.
+ *
+ * Real levels arrive with the bar endpoints (#30, #52), not from here.
+ */
+const BASE_LEVEL = 100
 
 function priceSeries(symbol: string, n: number, seed: number): number[] {
   const next = rng(seed)
@@ -122,7 +146,7 @@ function priceSeries(symbol: string, n: number, seed: number): number[] {
   const drift = (((hashString(symbol + ':drift') % 100) / 100) - 0.45) * 0.0016
   const vol = isCrypto(symbol) ? 0.032 : 0.017
   const out: number[] = []
-  let p = basePrice(symbol)
+  let p = BASE_LEVEL
   for (let i = 0; i < n; i++) {
     p *= Math.exp(drift + vol * gauss(next))
     out.push(Math.round(p * 100) / 100)
@@ -145,8 +169,12 @@ function analystText(symbol: string, score: number, r: number, close: number): s
   )
 }
 
-function simulate(symbol: string, req: RunRequest, days: number, endMs: number): BacktestResult {
-  const seed = hashString(`${symbol}|${days}|${req.start ?? ''}|${req.end ?? ''}`)
+function simulate(
+  symbol: string, req: RunRequest, days: number, endMs: number, seedKey: string,
+): BacktestResult {
+  // Seeded from the NORMALISED window, so a reversed date range draws the same
+  // series as the forward one rather than a different market.
+  const seed = hashString(`${symbol}|${days}|${seedKey}`)
   const total = days + WARMUP
   const times = calendar(symbol, endMs, total)
   const closes = priceSeries(symbol, total, seed)
@@ -155,11 +183,13 @@ function simulate(symbol: string, req: RunRequest, days: number, endMs: number):
   const slipRate = req.slippage_bps / 10_000
 
   let cash = req.starting_cash
-  let position = 0
-  let entryPrice = 0
-  let entryTs = 0
-  let entryReason = ''
-  let feesOnEntry = 0
+  /**
+   * Open lots, FIFO. Each buy pushes one; a sell drains them all (the rule only
+   * ever exits the whole position). One lot in means one `Trade` out, so every
+   * marker on the chart has a row in the table.
+   */
+  const lots: { ts: number; price: number; qty: number; fee: number; reason: string }[] = []
+  const position = () => lots.reduce((a, l) => a + l.qty, 0)
 
   const records: DayRecord[] = []
   const trades: Trade[] = []
@@ -181,53 +211,44 @@ function simulate(symbol: string, req: RunRequest, days: number, endMs: number):
     let filledQty = 0
     const order = pending.shift()
     if (order && order.action === 'Buy' && cash > 0) {
-      const price = close * (1 + slipRate)
+      const fillPrice = close * (1 + slipRate)
       const notional = Math.min(cash, req.starting_cash * 0.25)
-      const qty = notional / price
-      if (qty > 0) {
+      const lotQty = notional / fillPrice
+      if (lotQty > 0) {
         const fee = notional * feeRate
         cash -= notional + fee
         totalFees += fee
-        if (position === 0) {
-          entryPrice = price
-          entryTs = ts
-          entryReason = order.reason
-          feesOnEntry = fee
-        } else {
-          // Averaging up: blend the cost basis rather than opening a second lot.
-          entryPrice = (entryPrice * position + price * qty) / (position + qty)
-          feesOnEntry += fee
-        }
-        position += qty
+        lots.push({ ts, price: fillPrice, qty: lotQty, fee, reason: order.reason })
         filledAction = 'Buy'
-        filledQty = qty
+        filledQty = lotQty
       }
-    } else if (order && order.action === 'Sell' && position > 0) {
-      const price = close * (1 - slipRate)
-      const proceeds = position * price
-      const fee = proceeds * feeRate
-      cash += proceeds - fee
-      totalFees += fee
-      const cost = entryPrice * position
-      const pnl = proceeds - cost - fee - feesOnEntry
-      trades.push({
-        symbol,
-        entry_ts: entryTs,
-        entry_price: entryPrice,
-        exit_ts: ts,
-        exit_price: price,
-        qty: position,
-        pnl,
-        pnl_pct: cost > 0 ? pnl / cost : 0,
-        fees: fee + feesOnEntry,
-        entry_reason: entryReason,
-        exit_reason: order.reason,
-      })
+    } else if (order && order.action === 'Sell' && lots.length > 0) {
+      const fillPrice = close * (1 - slipRate)
+      filledQty = position()
+      // Close every open lot at this price, one `Trade` each.
+      for (const lot of lots) {
+        const proceeds = lot.qty * fillPrice
+        const exitFee = proceeds * feeRate
+        cash += proceeds - exitFee
+        totalFees += exitFee
+        const cost = lot.price * lot.qty
+        const pnl = proceeds - cost - exitFee - lot.fee
+        trades.push({
+          symbol,
+          entry_ts: lot.ts,
+          entry_price: lot.price,
+          exit_ts: ts,
+          exit_price: fillPrice,
+          qty: lot.qty,
+          pnl,
+          pnl_pct: cost > 0 ? pnl / cost : 0,
+          fees: exitFee + lot.fee,
+          entry_reason: lot.reason,
+          exit_reason: order.reason,
+        })
+      }
+      lots.length = 0
       filledAction = 'Sell'
-      filledQty = position
-      position = 0
-      entryPrice = 0
-      feesOnEntry = 0
     }
 
     // Today's decision, filled tomorrow.
@@ -236,7 +257,7 @@ function simulate(symbol: string, req: RunRequest, days: number, endMs: number):
       if (sig.score >= 0.2 && cash > req.starting_cash * 0.02) {
         reason = `score ${sig.score.toFixed(3)} above the buy threshold with RSI ${sig.rsi.toFixed(1)}`
         pending.push({ action: 'Buy', reason })
-      } else if (sig.score <= -0.2 && position > 0) {
+      } else if (sig.score <= -0.2 && lots.length > 0) {
         reason = `score ${sig.score.toFixed(3)} below the sell threshold with RSI ${sig.rsi.toFixed(1)}`
         pending.push({ action: 'Sell', reason })
       } else {
@@ -244,8 +265,9 @@ function simulate(symbol: string, req: RunRequest, days: number, endMs: number):
       }
     }
 
-    if (position > 0) daysInMarket++
-    const equity = cash + position * close
+    const held = position()
+    if (held > 0) daysInMarket++
+    const equity = cash + held * close
 
     records.push({
       ts,
@@ -260,23 +282,24 @@ function simulate(symbol: string, req: RunRequest, days: number, endMs: number):
     })
   }
 
-  // An open position at the end is a real outcome, not an error: report it with
-  // a null exit so the UI can show it as still running.
-  if (position > 0) {
-    const last = records[records.length - 1]
-    const cost = entryPrice * position
-    const mark = last.close * position
+  // Lots still open at the end are a real outcome, not an error: report each with
+  // a null exit, marked to the last close, so the UI can show it as still running.
+  const lastClose = records.length ? records[records.length - 1].close : 0
+  for (const lot of lots) {
+    const cost = lot.price * lot.qty
+    const mark = lastClose * lot.qty
+    const pnl = mark - cost - lot.fee
     trades.push({
       symbol,
-      entry_ts: entryTs,
-      entry_price: entryPrice,
+      entry_ts: lot.ts,
+      entry_price: lot.price,
       exit_ts: null,
       exit_price: null,
-      qty: position,
-      pnl: mark - cost - feesOnEntry,
-      pnl_pct: cost > 0 ? (mark - cost - feesOnEntry) / cost : 0,
-      fees: feesOnEntry,
-      entry_reason: entryReason,
+      qty: lot.qty,
+      pnl,
+      pnl_pct: cost > 0 ? pnl / cost : 0,
+      fees: lot.fee,
+      entry_reason: lot.reason,
       exit_reason: '',
     })
   }
@@ -333,7 +356,9 @@ function metrics(
     win_rate: closed.length ? wins.length / closed.length : 0,
     avg_win: wins.length ? sumWin / wins.length : 0,
     avg_loss: losses.length ? -sumLoss / losses.length : 0,
-    profit_factor: sumLoss > 0 ? sumWin / sumLoss : sumWin > 0 ? Infinity : 0,
+    // null, never Infinity: serde_json writes non-finite floats as null, so the
+    // wire shape has to tolerate the no-losses case explicitly.
+    profit_factor: sumLoss > 0 ? sumWin / sumLoss : sumWin > 0 ? null : 0,
     exposure: days.length ? daysInMarket / days.length : 0,
     buy_hold_return: first > 0 ? (last - first) / first : 0,
     total_fees: totalFees,
@@ -347,16 +372,21 @@ export function fixtureRun(req: RunRequest): BacktestResult[] {
   // Snap to UTC midnight. Using `Date.now()` directly would shift the calendar
   // by milliseconds between two otherwise identical calls, and the whole point
   // of this module is that the same controls redraw the same chart.
-  const endMs = req.end
-    ? Date.parse(`${req.end}T00:00:00Z`)
-    : Math.floor(Date.now() / MS_PER_DAY) * MS_PER_DAY
-  const days = req.days ?? Math.max(
-    20,
-    Math.round((endMs - Date.parse(`${req.start ?? iso(endMs - 90 * MS_PER_DAY)}T00:00:00Z`)) / MS_PER_DAY),
-  )
+  const today = Math.floor(Date.now() / MS_PER_DAY) * MS_PER_DAY
+  const parse = (d: string) => Date.parse(`${d}T00:00:00Z`)
 
-  const runId = `fixture_${hashString(JSON.stringify(req)).toString(16)}`
-  const results = req.symbols.map((s) => simulate(s, req, days, endMs))
+  let endMs = req.end ? parse(req.end) : today
+  let startMs = req.start ? parse(req.start) : endMs - 90 * MS_PER_DAY
+  // A reversed range is a slip of the date picker, not an error worth blocking on.
+  if (startMs > endMs) [startMs, endMs] = [endMs, startMs]
+
+  const seedKey = `${iso(startMs)}|${iso(endMs)}`
+  const runId = `fixture_${hashString(`${req.symbols.join(',')}|${seedKey}|${req.days ?? ''}`).toString(16)}`
+  // Day counts are per symbol: a stock and a crypto pair cover the same calendar
+  // range with different numbers of bars.
+  const results = req.symbols.map((s) =>
+    simulate(s, req, req.days ?? tradingDaysBetween(s, startMs, endMs), endMs, seedKey),
+  )
   const windowStart = results[0]?.days[0]?.ts ?? endMs
   const config: RunConfig = {
     arm: req.arm,
