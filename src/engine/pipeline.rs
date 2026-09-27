@@ -312,7 +312,7 @@ fn norm(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::error::{BrokerError, LlmError, MarketError, StoreError};
-    use crate::domain::types::{Bar, Order};
+    use crate::domain::types::{Bar, Order, Timeframe};
     use async_trait::async_trait;
     use rust_decimal_macros::dec;
     use std::sync::Mutex;
@@ -321,9 +321,10 @@ mod tests {
     struct FakeBars;
     #[async_trait]
     impl BarSource for FakeBars {
-        async fn daily_bars(
+        async fn bars(
             &self,
             symbol: &Symbol,
+            _timeframe: Timeframe,
             _limit: usize,
         ) -> Result<Vec<Bar>, MarketError> {
             let bars = (10..=50)

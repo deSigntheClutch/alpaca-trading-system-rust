@@ -25,6 +25,33 @@ impl Symbol {
     }
 }
 
+/// Bar sampling interval. Daily is the default and the only one phase 1 uses;
+/// the others open the seam for #30 without changing any call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Timeframe {
+    Hour1,
+    #[default]
+    Day1,
+    Week1,
+}
+
+impl Timeframe {
+    /// Alpaca's wire spelling. Also the directory name under `data/bars/` (#47).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Timeframe::Hour1 => "1Hour",
+            Timeframe::Day1 => "1Day",
+            Timeframe::Week1 => "1Week",
+        }
+    }
+}
+
+impl std::fmt::Display for Timeframe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Which Alpaca market a symbol trades on. Selects the data endpoint (crypto
 /// `v1beta3` vs stock `v2`) and, later, the trading calendar and fee schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -149,5 +176,12 @@ mod asset_class_tests {
         assert_eq!(Symbol::from("BTC/USD").asset_class(), AssetClass::Crypto);
         assert_eq!(Symbol::from("AAPL").asset_class(), AssetClass::Stock);
         assert_eq!(AssetClass::default(), AssetClass::Crypto);
+    }
+
+    #[test]
+    fn timeframe_wire_spelling() {
+        assert_eq!(Timeframe::default(), Timeframe::Day1);
+        assert_eq!(Timeframe::Hour1.as_str(), "1Hour");
+        assert_eq!(Timeframe::Week1.to_string(), "1Week");
     }
 }

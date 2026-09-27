@@ -18,7 +18,9 @@ use std::sync::Mutex;
 
 use crate::domain::dto::{BacktestResult, DayRecord};
 use crate::domain::error::{BrokerError, MarketError, StoreError};
-use crate::domain::types::{Action, Bar, Decision, Order, OrderRequest, Position, Side, Symbol};
+use crate::domain::types::{
+    Action, Bar, Decision, Order, OrderRequest, Position, Side, Symbol, Timeframe,
+};
 use crate::engine::pipeline::{Pipeline, PipelineConfig};
 use crate::traits::{BarSource, Broker, LlmClient, Store};
 
@@ -74,7 +76,14 @@ impl SimMarket {
 
 #[async_trait]
 impl BarSource for SimMarket {
-    async fn daily_bars(&self, _symbol: &Symbol, limit: usize) -> Result<Vec<Bar>, MarketError> {
+    /// The sim holds one daily series; `timeframe` is accepted for the port and
+    /// ignored (intraday replay is out of scope for this phase, see #30).
+    async fn bars(
+        &self,
+        _symbol: &Symbol,
+        _timeframe: Timeframe,
+        limit: usize,
+    ) -> Result<Vec<Bar>, MarketError> {
         // The no-lookahead guarantee: only bars up to and including `cursor`, at most
         // `limit` of them. Nothing after today is ever visible to the signal/LLM.
         let cursor = self.cursor();

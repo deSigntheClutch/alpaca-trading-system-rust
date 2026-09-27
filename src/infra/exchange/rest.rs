@@ -3,7 +3,6 @@
 //! Market data lives on a different host than trading (`data.` vs `paper-api.`), so
 //! `AlpacaRest` holds both bases.
 
-use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -11,7 +10,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use crate::domain::error::{BrokerError, MarketError};
-use crate::domain::types::{AssetClass, Bar, Order, OrderRequest, Position, Symbol};
+use crate::domain::types::{AssetClass, Bar, Order, OrderRequest, Position, Symbol, Timeframe};
 use crate::traits::{BarSource, Broker};
 
 use super::parse_rfc3339_millis;
@@ -63,13 +62,11 @@ fn normalize_trade_base(base: &str) -> String {
 }
 
 /// Alpaca bars response, same shape for crypto and stocks:
-/// `{ "bars": { "BTC/USD": [ {...} ] }, "next_page_token": null }`.
+/// `{ "bars": { "BTC/USD": [ {...} ] } }`.
 #[derive(Deserialize)]
 struct BarsResponse {
     #[serde(default)]
-    bars: HashMap<String, Vec<RawBar>>,
-    #[serde(default)]
-    next_page_token: Option<String>,
+    bars: std::collections::HashMap<String, Vec<RawBar>>,
 }
 
 #[derive(Deserialize)]
@@ -82,56 +79,55 @@ struct RawBar {
     v: f64,
 }
 
-/// Alpaca caps one bars request at this many data points across all symbols.
-const MAX_PAGE: usize = 10_000;
+/// Calendar days to look back so that `limit` bars of `timeframe` fit in the window.
+/// Crypto trades every hour of every day; stocks five days a week, and hourly stock
+/// bars are counted at the 7 regular-session bars a day, so extended hours only add
+/// margin. Always generous: a short window silently returns fewer bars than asked.
+fn lookback_days(class: AssetClass, timeframe: Timeframe, limit: usize) -> usize {
+    let bars_per_day = match (class, timeframe) {
+        (AssetClass::Crypto, Timeframe::Hour1) => 24,
+        (AssetClass::Stock, Timeframe::Hour1) => 7,
+        (_, Timeframe::Day1) => 1,
+        (_, Timeframe::Week1) => return limit * 7 + 14,
+    };
+    let days = limit.div_ceil(bars_per_day);
+    match class {
+        AssetClass::Crypto => days + 5,
+        AssetClass::Stock => days * 7 / 5 + 10,
+    }
+}
 
 #[async_trait]
 impl BarSource for AlpacaRest {
-    async fn daily_bars(&self, symbol: &Symbol, limit: usize) -> Result<Vec<Bar>, MarketError> {
-        let mut many = self.get_bars_many(std::slice::from_ref(symbol), limit).await?;
-        Ok(many.remove(symbol).unwrap_or_default())
-    }
-
-    /// One request for all symbols (plus pagination), not N. The endpoint follows
-    /// the asset class of the first symbol; callers do not mix classes in one call.
-    /// Each symbol's bars come back oldest→newest, at most `limit` of them.
-    async fn get_bars_many(
+    /// Most-recent `limit` bars of `timeframe`, returned oldest→newest (what
+    /// `signals::compute` wants). One symbol per request: Alpaca fills a multi-symbol
+    /// `limit` symbol by symbol, so batching buys nothing here. Callers wanting
+    /// several symbols run these concurrently; the backfill's range fetch is a
+    /// separate method (#30).
+    async fn bars(
         &self,
-        symbols: &[Symbol],
+        symbol: &Symbol,
+        timeframe: Timeframe,
         limit: usize,
-    ) -> Result<HashMap<Symbol, Vec<Bar>>, MarketError> {
-        let mut out: HashMap<Symbol, Vec<Bar>> =
-            symbols.iter().map(|s| (s.clone(), Vec::new())).collect();
-        if symbols.is_empty() || limit == 0 {
-            return Ok(out);
-        }
-        let class = symbols[0].asset_class();
-        debug_assert!(symbols.iter().all(|s| s.asset_class() == class));
-
+    ) -> Result<Vec<Bar>, MarketError> {
+        let class = symbol.asset_class();
         let url = match class {
             AssetClass::Crypto => format!("{}/v1beta3/crypto/us/bars", self.data_base),
             AssetClass::Stock => format!("{}/v2/stocks/bars", self.data_base),
         };
 
-        // Without an explicit `start`, Alpaca returns only the current day's bar. Look
-        // back far enough in calendar days that `limit` *trading* days come back:
-        // crypto trades every day; stocks five days a week plus holidays. The trading
-        // calendar (#52) replaces this estimate with an exact count.
-        let lookback_days = match class {
-            AssetClass::Crypto => limit + 5,
-            AssetClass::Stock => limit * 7 / 5 + 10,
-        };
-        let start = (chrono::Utc::now() - chrono::Duration::days(lookback_days as i64))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-        // `limit` on the wire counts data points across ALL symbols, not per symbol.
-        let page_limit = (limit * symbols.len()).min(MAX_PAGE).to_string();
-        let joined = symbols.iter().map(Symbol::as_str).collect::<Vec<_>>().join(",");
+        // Without an explicit `start`, Alpaca returns only the current day's bars. Look
+        // back far enough in calendar days that `limit` bars actually come back;
+        // over-fetching is harmless because `sort=desc` + `limit` keeps the recent end.
+        let start = (chrono::Utc::now()
+            - chrono::Duration::days(lookback_days(class, timeframe, limit) as i64))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let limit_s = limit.to_string();
 
         let mut params: Vec<(&str, &str)> = vec![
-            ("symbols", &joined),
-            ("timeframe", "1Day"),
-            ("limit", &page_limit),
+            ("symbols", symbol.as_str()),
+            ("timeframe", timeframe.as_str()),
+            ("limit", &limit_s),
             ("start", &start),
             ("sort", "desc"), // newest first, so `limit` gives the RECENT window
         ];
@@ -141,60 +137,41 @@ impl BarSource for AlpacaRest {
             params.push(("adjustment", "all"));
         }
 
-        let mut page_token: Option<String> = None;
-        loop {
-            let mut req = self.auth(self.http.get(&url)).query(&params);
-            if let Some(tok) = &page_token {
-                req = req.query(&[("page_token", tok.as_str())]);
-            }
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| MarketError::Request(e.to_string()))?;
+        let resp = self
+            .auth(self.http.get(&url))
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| MarketError::Request(e.to_string()))?;
 
-            if !resp.status().is_success() {
-                let code = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                return Err(MarketError::Request(format!("bars {code}: {body}")));
-            }
-
-            let parsed: BarsResponse = resp
-                .json()
-                .await
-                .map_err(|e| MarketError::Decode(e.to_string()))?;
-
-            for (key, raws) in parsed.bars {
-                let symbol = Symbol::from(key);
-                let bars = out.entry(symbol.clone()).or_default();
-                bars.extend(raws.into_iter().filter_map(|r| {
-                    Some(Bar {
-                        symbol: symbol.clone(),
-                        ts: parse_rfc3339_millis(&r.t)?,
-                        open: r.o,
-                        high: r.h,
-                        low: r.l,
-                        close: r.c,
-                        volume: r.v,
-                    })
-                }));
-            }
-
-            match parsed.next_page_token {
-                Some(tok) if !tok.is_empty() => page_token = Some(tok),
-                _ => break,
-            }
+        if !resp.status().is_success() {
+            let code = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(MarketError::Request(format!("bars {code}: {body}")));
         }
 
-        // Pages arrive newest-first and are grouped by symbol on the wire, so sort
-        // explicitly rather than trusting the order, then keep the recent `limit`.
-        for bars in out.values_mut() {
-            bars.sort_by_key(|b| b.ts);
-            bars.dedup_by_key(|b| b.ts);
-            if bars.len() > limit {
-                bars.drain(..bars.len() - limit);
-            }
-        }
-        Ok(out)
+        let mut parsed: BarsResponse = resp
+            .json()
+            .await
+            .map_err(|e| MarketError::Decode(e.to_string()))?;
+
+        let raws = parsed.bars.remove(symbol.as_str()).unwrap_or_default();
+        let mut bars: Vec<Bar> = raws
+            .into_iter()
+            .filter_map(|r| {
+                Some(Bar {
+                    symbol: symbol.clone(),
+                    ts: parse_rfc3339_millis(&r.t)?,
+                    open: r.o,
+                    high: r.h,
+                    low: r.l,
+                    close: r.c,
+                    volume: r.v,
+                })
+            })
+            .collect();
+        bars.reverse(); // desc -> asc (chronological)
+        Ok(bars)
     }
 }
 
@@ -352,5 +329,29 @@ mod tests {
             normalize_trade_base("https://paper-api.alpaca.markets/v2/"),
             want
         );
+    }
+}
+
+#[cfg(test)]
+mod lookback_tests {
+    use super::*;
+
+    #[test]
+    fn stocks_look_back_further_than_crypto_for_the_same_bar_count() {
+        let c = lookback_days(AssetClass::Crypto, Timeframe::Day1, 60);
+        let s = lookback_days(AssetClass::Stock, Timeframe::Day1, 60);
+        assert_eq!(c, 65);
+        assert!(s > c, "stock={s} crypto={c}");
+        assert!(
+            s >= 60 * 7 / 5,
+            "60 trading days need at least 84 calendar days"
+        );
+    }
+
+    #[test]
+    fn hourly_and_weekly_scale_with_the_timeframe() {
+        assert_eq!(lookback_days(AssetClass::Crypto, Timeframe::Hour1, 48), 7); // 2 days + 5
+        assert!(lookback_days(AssetClass::Stock, Timeframe::Hour1, 70) >= 14); // 10 sessions
+        assert_eq!(lookback_days(AssetClass::Stock, Timeframe::Week1, 10), 84);
     }
 }

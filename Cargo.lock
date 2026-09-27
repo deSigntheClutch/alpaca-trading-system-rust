@@ -27,6 +27,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "futures",
+ "itertools",
  "reqwest",
  "rust_decimal",
  "rust_decimal_macros",
