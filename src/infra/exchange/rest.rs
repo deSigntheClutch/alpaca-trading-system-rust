@@ -3,6 +3,7 @@
 //! Market data lives on a different host than trading (`data.` vs `paper-api.`), so
 //! `AlpacaRest` holds both bases.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -10,7 +11,7 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 
 use crate::domain::error::{BrokerError, MarketError};
-use crate::domain::types::{Bar, Order, OrderRequest, Position, Symbol};
+use crate::domain::types::{AssetClass, Bar, Order, OrderRequest, Position, Symbol};
 use crate::traits::{BarSource, Broker};
 
 use super::parse_rfc3339_millis;
@@ -61,11 +62,14 @@ fn normalize_trade_base(base: &str) -> String {
     b.strip_suffix("/v2").unwrap_or(b).to_string()
 }
 
-/// Alpaca crypto bars response: `{ "bars": { "BTC/USD": [ {...} ] } }`.
+/// Alpaca bars response, same shape for crypto and stocks:
+/// `{ "bars": { "BTC/USD": [ {...} ] }, "next_page_token": null }`.
 #[derive(Deserialize)]
 struct BarsResponse {
     #[serde(default)]
-    bars: std::collections::HashMap<String, Vec<RawBar>>,
+    bars: HashMap<String, Vec<RawBar>>,
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,59 +82,119 @@ struct RawBar {
     v: f64,
 }
 
+/// Alpaca caps one bars request at this many data points across all symbols.
+const MAX_PAGE: usize = 10_000;
+
 #[async_trait]
 impl BarSource for AlpacaRest {
-    /// Most-recent `limit` daily bars, returned oldest→newest (what `signals::compute`
-    /// wants). Same crypto endpoint works for `"BTC/USD"` and future stock symbols
-    /// (via a different path — that's the stock milestone).
     async fn daily_bars(&self, symbol: &Symbol, limit: usize) -> Result<Vec<Bar>, MarketError> {
-        let url = format!("{}/v1beta3/crypto/us/bars", self.data_base);
-        let limit_s = limit.to_string();
-        // Without an explicit `start`, Alpaca returns only the current day's bar. Look
-        // back `limit` days (+buffer) so `limit` daily bars actually come back.
-        let start = (chrono::Utc::now() - chrono::Duration::days(limit as i64 + 5))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let resp = self
-            .auth(self.http.get(&url))
-            .query(&[
-                ("symbols", symbol.as_str()),
-                ("timeframe", "1Day"),
-                ("limit", &limit_s),
-                ("start", &start),
-                ("sort", "desc"), // newest first, so `limit` gives the RECENT window
-            ])
-            .send()
-            .await
-            .map_err(|e| MarketError::Request(e.to_string()))?;
+        let mut many = self.get_bars_many(std::slice::from_ref(symbol), limit).await?;
+        Ok(many.remove(symbol).unwrap_or_default())
+    }
 
-        if !resp.status().is_success() {
-            let code = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(MarketError::Request(format!("bars {code}: {body}")));
+    /// One request for all symbols (plus pagination), not N. The endpoint follows
+    /// the asset class of the first symbol; callers do not mix classes in one call.
+    /// Each symbol's bars come back oldest→newest, at most `limit` of them.
+    async fn get_bars_many(
+        &self,
+        symbols: &[Symbol],
+        limit: usize,
+    ) -> Result<HashMap<Symbol, Vec<Bar>>, MarketError> {
+        let mut out: HashMap<Symbol, Vec<Bar>> =
+            symbols.iter().map(|s| (s.clone(), Vec::new())).collect();
+        if symbols.is_empty() || limit == 0 {
+            return Ok(out);
+        }
+        let class = symbols[0].asset_class();
+        debug_assert!(symbols.iter().all(|s| s.asset_class() == class));
+
+        let url = match class {
+            AssetClass::Crypto => format!("{}/v1beta3/crypto/us/bars", self.data_base),
+            AssetClass::Stock => format!("{}/v2/stocks/bars", self.data_base),
+        };
+
+        // Without an explicit `start`, Alpaca returns only the current day's bar. Look
+        // back far enough in calendar days that `limit` *trading* days come back:
+        // crypto trades every day; stocks five days a week plus holidays. The trading
+        // calendar (#52) replaces this estimate with an exact count.
+        let lookback_days = match class {
+            AssetClass::Crypto => limit + 5,
+            AssetClass::Stock => limit * 7 / 5 + 10,
+        };
+        let start = (chrono::Utc::now() - chrono::Duration::days(lookback_days as i64))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        // `limit` on the wire counts data points across ALL symbols, not per symbol.
+        let page_limit = (limit * symbols.len()).min(MAX_PAGE).to_string();
+        let joined = symbols.iter().map(Symbol::as_str).collect::<Vec<_>>().join(",");
+
+        let mut params: Vec<(&str, &str)> = vec![
+            ("symbols", &joined),
+            ("timeframe", "1Day"),
+            ("limit", &page_limit),
+            ("start", &start),
+            ("sort", "desc"), // newest first, so `limit` gives the RECENT window
+        ];
+        if class == AssetClass::Stock {
+            // Fold splits and dividends into history so a 4:1 split is not a -75% bar.
+            // The crypto endpoint has no such parameter.
+            params.push(("adjustment", "all"));
         }
 
-        let mut parsed: BarsResponse = resp
-            .json()
-            .await
-            .map_err(|e| MarketError::Decode(e.to_string()))?;
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut req = self.auth(self.http.get(&url)).query(&params);
+            if let Some(tok) = &page_token {
+                req = req.query(&[("page_token", tok.as_str())]);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| MarketError::Request(e.to_string()))?;
 
-        let raws = parsed.bars.remove(symbol.as_str()).unwrap_or_default();
-        let mut bars: Vec<Bar> = raws
-            .into_iter()
-            .filter_map(|r| {
-                Some(Bar {
-                    symbol: symbol.clone(),
-                    ts: parse_rfc3339_millis(&r.t)?,
-                    open: r.o,
-                    high: r.h,
-                    low: r.l,
-                    close: r.c,
-                    volume: r.v,
-                })
-            })
-            .collect();
-        bars.reverse(); // desc -> asc (chronological)
-        Ok(bars)
+            if !resp.status().is_success() {
+                let code = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(MarketError::Request(format!("bars {code}: {body}")));
+            }
+
+            let parsed: BarsResponse = resp
+                .json()
+                .await
+                .map_err(|e| MarketError::Decode(e.to_string()))?;
+
+            for (key, raws) in parsed.bars {
+                let symbol = Symbol::from(key);
+                let bars = out.entry(symbol.clone()).or_default();
+                bars.extend(raws.into_iter().filter_map(|r| {
+                    Some(Bar {
+                        symbol: symbol.clone(),
+                        ts: parse_rfc3339_millis(&r.t)?,
+                        open: r.o,
+                        high: r.h,
+                        low: r.l,
+                        close: r.c,
+                        volume: r.v,
+                    })
+                }));
+            }
+
+            match parsed.next_page_token {
+                Some(tok) if !tok.is_empty() => page_token = Some(tok),
+                _ => break,
+            }
+        }
+
+        // Pages arrive newest-first and are grouped by symbol on the wire, so sort
+        // explicitly rather than trusting the order, then keep the recent `limit`.
+        for bars in out.values_mut() {
+            bars.sort_by_key(|b| b.ts);
+            bars.dedup_by_key(|b| b.ts);
+            if bars.len() > limit {
+                bars.drain(..bars.len() - limit);
+            }
+        }
+        Ok(out)
     }
 }
 

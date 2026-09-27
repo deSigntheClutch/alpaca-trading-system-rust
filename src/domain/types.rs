@@ -13,6 +13,25 @@ impl Symbol {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Alpaca crypto symbols are always `BASE/QUOTE`; stock tickers never contain
+    /// a slash. Deriving the class here keeps every port signature symbol-only.
+    pub fn asset_class(&self) -> AssetClass {
+        if self.0.contains('/') {
+            AssetClass::Crypto
+        } else {
+            AssetClass::Stock
+        }
+    }
+}
+
+/// Which Alpaca market a symbol trades on. Selects the data endpoint (crypto
+/// `v1beta3` vs stock `v2`) and, later, the trading calendar and fee schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum AssetClass {
+    #[default]
+    Crypto,
+    Stock,
 }
 
 impl std::fmt::Display for Symbol {
@@ -119,4 +138,16 @@ pub struct Event {
     pub decision_id: String,
     /// JSON blob, same as written — callers parse the fields they care about.
     pub payload: String,
+}
+
+#[cfg(test)]
+mod asset_class_tests {
+    use super::*;
+
+    #[test]
+    fn slash_means_crypto_else_stock() {
+        assert_eq!(Symbol::from("BTC/USD").asset_class(), AssetClass::Crypto);
+        assert_eq!(Symbol::from("AAPL").asset_class(), AssetClass::Stock);
+        assert_eq!(AssetClass::default(), AssetClass::Crypto);
+    }
 }
