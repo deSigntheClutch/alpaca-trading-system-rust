@@ -18,6 +18,21 @@ pub enum MarketError {
     Timeout,
 }
 
+/// Fundamentals-source failures (earnings calendar, market cap). REST only.
+#[derive(Debug, Error)]
+pub enum FundamentalError {
+    #[error("request failed: {0}")]
+    Request(String),
+    #[error("decode failed: {0}")]
+    Decode(String),
+    #[error("rate limited by vendor")]
+    RateLimited,
+    #[error("API key missing: {0}")]
+    MissingKey(&'static str),
+    #[error("timed out")]
+    Timeout,
+}
+
 /// Event/market-data store failures.
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -72,6 +87,8 @@ pub enum PipelineError {
     Llm(#[from] LlmError),
     #[error(transparent)]
     Broker(#[from] BrokerError),
+    #[error(transparent)]
+    Fundamental(#[from] FundamentalError),
     #[error("decision parse failed: {0}")]
     Decision(String),
 }

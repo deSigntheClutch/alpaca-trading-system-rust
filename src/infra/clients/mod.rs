@@ -6,10 +6,12 @@
 pub(crate) mod alpaca;
 pub(crate) mod anthropic;
 pub(crate) mod bedrock;
+pub(crate) mod finnhub;
 
 pub use alpaca::AlpacaClient;
 pub use anthropic::AnthropicClient;
 pub use bedrock::BedrockClient;
+pub use finnhub::FinnhubClient;
 
 /// RFC3339 → epoch millis, shared by every vendor that sends ISO timestamps.
 pub(crate) fn parse_rfc3339_millis(s: &str) -> Option<i64> {

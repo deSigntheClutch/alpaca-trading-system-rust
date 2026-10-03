@@ -22,7 +22,7 @@ pub mod market;
 pub mod store;
 
 pub use broker::AlpacaBroker;
-pub use clients::{AlpacaClient, AnthropicClient, BedrockClient};
+pub use clients::{AlpacaClient, AnthropicClient, BedrockClient, FinnhubClient};
 pub use llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
 pub use market::{AlpacaBars, CryptoWs};
 pub use store::{MemStore, ScyllaStore};

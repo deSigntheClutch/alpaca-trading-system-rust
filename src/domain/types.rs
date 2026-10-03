@@ -1,6 +1,7 @@
 //! Shared domain types. Money (order qty, position value, notional) is `Decimal`,
 //! never f64. f64 appears only on bar OHLCV — that's indicator input, not money.
 
+use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -165,6 +166,20 @@ pub struct Event {
     pub decision_id: String,
     /// JSON blob, same as written — callers parse the fields they care about.
     pub payload: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EarningsHour {
+    BeforeOpen,
+    AfterClose,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EarningsEvent {
+    pub symbol: Symbol,
+    pub date: NaiveDate,
+    pub earnings_hour: Option<EarningsHour>,
+    pub eps_estimate: Option<f64>,
 }
 
 #[cfg(test)]
