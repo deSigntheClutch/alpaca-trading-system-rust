@@ -53,6 +53,19 @@ pub enum LlmError {
     BadResponse(String),
 }
 
+/// News feed failures.
+#[derive(Debug, Error)]
+pub enum NewsError {
+    #[error("request failed: {0}")]
+    Request(String),
+    #[error("decode failed: {0}")]
+    Decode(String),
+    #[error("rate limited by vendor")]
+    RateLimited,
+    #[error("timed out")]
+    Timeout,
+}
+
 /// Broker (order placement / account) failures.
 #[derive(Debug, Error)]
 pub enum BrokerError {

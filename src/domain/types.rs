@@ -182,6 +182,19 @@ pub struct EarningsEvent {
     pub eps_estimate: Option<f64>,
 }
 
+/// One news item as the vendor tagged it. `ts` is the publish time in epoch millis,
+/// like every other timestamp here. `symbols` is the vendor's tagging, which can be
+/// broader than what the caller asked for; filtering is the caller's job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Headline {
+    pub id: u64,
+    pub ts: i64,
+    pub headline: String,
+    pub source: String,
+    pub url: Option<String>,
+    pub symbols: Vec<Symbol>,
+}
+
 #[cfg(test)]
 mod asset_class_tests {
     use super::*;

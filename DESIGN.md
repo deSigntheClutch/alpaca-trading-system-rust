@@ -224,11 +224,12 @@ config/strategies.toml strategies (id, symbols, tempo) — secrets live in .env
 src/
   main.rs             binary — load config, pick store+LLM, run one cycle/symbol (or BACKTEST=1)
   lib.rs              declares the layers
-  traits.rs           PORTS — BarSource · MarketStream · Broker · Store · LlmClient
+  traits/             PORTS — BarSource · MarketStream · Broker · Store · LlmClient · FundamentalSource · NewsSource
   bin/web.rs          read-only axum API (§7) — GET /api/events · /api/backtest
   domain/             types · error · signals + data (dep-free math) · config (TOML+env, live barrier)
   infra/              PORT IMPLS — clients/ (AlpacaClient · AnthropicClient · BedrockClient: transport + wire types)
                       · market.rs (AlpacaBars · CryptoWs) · broker.rs (AlpacaBroker) · store.rs (Scylla · Mem) · llm.rs (Claude · Bedrock)
+                      · news.rs (AlpacaNews) · clients/finnhub.rs (FundamentalSource)
   engine/             OVER THE PORTS — pipeline (agents+WAL) · guards · ingest · backtest (§6)
 frontend/             React+Vite SPA (§7) — price chart + markers + decision drill-down; ts-rs types
 ```

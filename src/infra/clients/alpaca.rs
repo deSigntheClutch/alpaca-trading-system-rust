@@ -110,6 +110,31 @@ pub(crate) struct RawPosition {
     pub(crate) market_value: String,
 }
 
+/// `GET /v1beta1/news`: `{ "news": [ {...} ], "next_page_token": "..." | null }`.
+#[derive(Deserialize)]
+pub(crate) struct NewsResponse {
+    #[serde(default)]
+    pub(crate) news: Vec<RawNews>,
+    #[serde(default)]
+    pub(crate) next_page_token: Option<String>,
+}
+
+/// One news item. `content`, `summary`, `images`, `author` are on the wire too and
+/// deliberately not read: the report wants headlines, and every extra field is more
+/// untrusted text heading for a prompt.
+#[derive(Deserialize)]
+pub(crate) struct RawNews {
+    pub(crate) id: u64,
+    pub(crate) headline: String,
+    #[serde(default)]
+    pub(crate) source: String,
+    #[serde(default)]
+    pub(crate) url: Option<String>,
+    pub(crate) created_at: String, // RFC3339
+    #[serde(default)]
+    pub(crate) symbols: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
