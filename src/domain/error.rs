@@ -33,6 +33,34 @@ pub enum FundamentalError {
     Timeout,
 }
 
+/// `config/universe.csv` failures. Every variant that comes from a row names the
+/// 1-based line in the file, so a bad edit is a one-glance fix.
+#[derive(Debug, Error)]
+pub enum UniverseError {
+    #[error("cannot read {path}: {source}")]
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("missing required column `{0}` in header")]
+    MissingColumn(&'static str),
+    #[error("line {line}: {source}")]
+    Row {
+        line: u64,
+        #[source]
+        source: csv::Error,
+    },
+    #[error("line {line}: empty symbol")]
+    EmptySymbol { line: u64 },
+    #[error("line {line}: duplicate symbol {symbol} (first seen on line {first})")]
+    Duplicate {
+        symbol: String,
+        line: u64,
+        first: u64,
+    },
+}
+
 /// Event/market-data store failures.
 #[derive(Debug, Error)]
 pub enum StoreError {

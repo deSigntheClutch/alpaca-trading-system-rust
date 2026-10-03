@@ -33,6 +33,8 @@ axum = "0.8"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 ts-rs = { version = "10", features = ["serde-json-impl"] }
 itertools = "0.15.0"
+# config/universe.csv (domain/universe.rs)
+csv = "1"
 
 [dev-dependencies]
 rust_decimal_macros = "1.40.0"
