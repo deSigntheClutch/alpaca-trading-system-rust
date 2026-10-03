@@ -17,7 +17,7 @@ use crate::domain::error::MarketError;
 use crate::domain::types::{AssetClass, Bar, Symbol, Tick, Timeframe};
 use crate::traits::{BarSource, MarketStream};
 
-use super::clients::alpaca::BarsResponse;
+use super::clients::alpaca::{BarsResponse, Host};
 use super::clients::{parse_rfc3339_millis, AlpacaClient};
 
 // ---- AlpacaBars -------------------------------------------------------------------
@@ -64,9 +64,9 @@ impl BarSource for AlpacaBars {
         limit: usize,
     ) -> Result<Vec<Bar>, MarketError> {
         let class = symbol.asset_class();
-        let url = match class {
-            AssetClass::Crypto => self.client.data_url("/v1beta3/crypto/us/bars"),
-            AssetClass::Stock => self.client.data_url("/v2/stocks/bars"),
+        let path = match class {
+            AssetClass::Crypto => "/v1beta3/crypto/us/bars",
+            AssetClass::Stock => "/v2/stocks/bars",
         };
 
         // Without an explicit `start`, Alpaca returns only the current day's bars. Look
@@ -90,24 +90,7 @@ impl BarSource for AlpacaBars {
             params.push(("adjustment", "all"));
         }
 
-        let resp = self
-            .client
-            .get(&url)
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| MarketError::Request(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let code = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(MarketError::Request(format!("bars {code}: {body}")));
-        }
-
-        let mut parsed: BarsResponse = resp
-            .json()
-            .await
-            .map_err(|e| MarketError::Decode(e.to_string()))?;
+        let mut parsed: BarsResponse = self.client.get_json(Host::Data, path, &params).await?;
 
         let raws = parsed.bars.remove(symbol.as_str()).unwrap_or_default();
         let mut bars: Vec<Bar> = raws

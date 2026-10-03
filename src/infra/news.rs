@@ -10,7 +10,7 @@ use crate::domain::error::NewsError;
 use crate::domain::types::{Headline, Symbol};
 use crate::traits::NewsSource;
 
-use super::clients::alpaca::{NewsResponse, RawNews};
+use super::clients::alpaca::{Host, NewsResponse, RawNews};
 use super::clients::{parse_rfc3339_millis, AlpacaClient};
 
 /// Alpaca caps one news page at 50 items.
@@ -43,46 +43,31 @@ impl NewsSource for AlpacaNews {
         if symbols.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let url = self.client.data_url("/v1beta1/news");
         let joined = symbols.iter().join(",");
         let start = chrono::DateTime::from_timestamp_millis(since)
             .ok_or_else(|| NewsError::Request(format!("since out of range: {since}")))?
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let page_limit = limit.min(MAX_PAGE).to_string();
+        let params: Vec<(&str, &str)> = vec![
+            ("symbols", joined.as_str()),
+            ("start", start.as_str()),
+            ("limit", page_limit.as_str()),
+            ("sort", "desc"),
+            ("include_content", "false"),
+        ];
 
         let mut out: Vec<Headline> = Vec::with_capacity(limit);
         let mut page_token: Option<String> = None;
         loop {
-            let mut req = self.client.get(&url).query(&[
-                ("symbols", joined.as_str()),
-                ("start", start.as_str()),
-                ("limit", page_limit.as_str()),
-                ("sort", "desc"),
-                ("include_content", "false"),
-            ]);
-            if let Some(tok) = &page_token {
-                req = req.query(&[("page_token", tok.as_str())]);
-            }
-            let resp = req.send().await.map_err(|e| {
-                if e.is_timeout() {
-                    NewsError::Timeout
-                } else {
-                    NewsError::Request(e.to_string())
+            let parsed: NewsResponse = {
+                let mut page_params = params.clone();
+                if let Some(tok) = &page_token {
+                    page_params.push(("page_token", tok.as_str()));
                 }
-            })?;
-
-            let status = resp.status();
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                return Err(NewsError::RateLimited);
-            }
-            if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(NewsError::Request(format!("news {status}: {body}")));
-            }
-            let parsed: NewsResponse = resp
-                .json()
-                .await
-                .map_err(|e| NewsError::Decode(e.to_string()))?;
+                self.client
+                    .get_json(Host::Data, "/v1beta1/news", &page_params)
+                    .await?
+            };
 
             let page_len = parsed.news.len();
             out.extend(parsed.news.into_iter().filter_map(Headline::from_raw));
