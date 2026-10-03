@@ -83,10 +83,10 @@ flowchart TB
   ENG --> BR[/"Broker"/]
   ENG --> ST[/"Store"/]
   ENG --> LL[/"LlmClient"/]
-  BS --- AL1["AlpacaRest (REST bars)"]
+  BS --- AL1["AlpacaBars (over AlpacaClient)"]
   BS --- HB["HistoricalBars (backtest)"]
   MS --- AL2["CryptoWs (24/7 WS)"]
-  BR --- AL1b["AlpacaRest (orders/account)"]
+  BR --- AL1b["AlpacaBroker (over AlpacaClient)"]
   BR --- SB["SimBroker (backtest)"]
   ST --- SC["ScyllaStore (WAL)"]
   ST --- MEM["MemStore (+JSONL)"]
@@ -227,7 +227,8 @@ src/
   traits.rs           PORTS — BarSource · MarketStream · Broker · Store · LlmClient
   bin/web.rs          read-only axum API (§7) — GET /api/events · /api/backtest
   domain/             types · error · signals + data (dep-free math) · config (TOML+env, live barrier)
-  infra/              PORT IMPLS — alpaca (REST+WS) · store (Scylla) · memstore · llm (Claude+Bedrock)
+  infra/              PORT IMPLS — clients/ (AlpacaClient · AnthropicClient · BedrockClient: transport + wire types)
+                      · market.rs (AlpacaBars · CryptoWs) · broker.rs (AlpacaBroker) · store.rs (Scylla · Mem) · llm.rs (Claude · Bedrock)
   engine/             OVER THE PORTS — pipeline (agents+WAL) · guards · ingest · backtest (§6)
 frontend/             React+Vite SPA (§7) — price chart + markers + decision drill-down; ts-rs types
 ```

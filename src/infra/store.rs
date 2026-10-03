@@ -1,12 +1,18 @@
-//! ScyllaDB store (impl #1 of `Store`) + local-file fallback.
+//! `Store` adapters.
+//!   - `MemStore`    — in-memory, optionally appending every event as a JSON line
+//!     (`EVENTS_PATH`) so the decision trail is inspectable with `jq` and no DB. Same
+//!     fields as the Scylla `events` table. Not crash-safe: for looking, not a WAL.
+//!   - `ScyllaStore` — ScyllaDB WAL + local-file fallback. The WAL write
+//!     (`order_intent` / `order_result`) goes at **QUORUM**; if Scylla is unreachable
+//!     the event is appended to a local file so an order is NEVER placed with zero
+//!     record, and that file is replayed on a later run.
 //!
-//! The WAL write (`order_intent` / `order_result`) goes at **QUORUM** — it must
-//! survive losing a node. If Scylla is unreachable we append the event as a JSON
-//! line to a local file so an order is NEVER placed with zero record; that file is
-//! replayed into Scylla on a later run (ponytail: replay job is Phase 4).
+//! Scylla has no HTTP client under `clients/`: its transport is the driver `Session`,
+//! owned by `ScyllaStore` directly.
 
 use std::fs::OpenOptions;
 use std::io::Write as _;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use scylla::client::session::Session;
@@ -19,6 +25,102 @@ use serde::Deserialize;
 use crate::domain::error::StoreError;
 use crate::domain::types::{Bar, Event, Symbol};
 use crate::traits::Store;
+
+// ---- MemStore ---------------------------------------------------------------------
+
+#[derive(Default)]
+pub struct MemStore {
+    /// If set, each event is also appended here as one JSON line.
+    path: Option<PathBuf>,
+}
+
+impl MemStore {
+    /// `path = Some(..)` → also append events as JSON lines there (for `jq`); `None` →
+    /// stdout log only.
+    pub fn new(path: Option<PathBuf>) -> Self {
+        Self { path }
+    }
+}
+
+#[async_trait]
+impl Store for MemStore {
+    async fn append_event(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+        ts: i64,
+        step: &str,
+        decision_id: &str,
+        payload: &str,
+    ) -> Result<(), StoreError> {
+        tracing::info!(strategy_id, %symbol, step, "event (mem)");
+
+        if let Some(path) = &self.path {
+            // Inline the payload as real JSON when it parses, else keep it as a string —
+            // so `jq '.payload'` works on decision/analyst blobs.
+            let payload_val: serde_json::Value = serde_json::from_str(payload)
+                .unwrap_or_else(|_| serde_json::Value::String(payload.to_string()));
+            let line = serde_json::json!({
+                "ts": ts,
+                "strategy_id": strategy_id,
+                "symbol": symbol.as_str(),
+                "step": step,
+                "decision_id": decision_id,
+                "payload": payload_val,
+            });
+            // Best-effort: a failed inspection-log write must not abort a decision cycle.
+            match OpenOptions::new().create(true).append(true).open(path) {
+                Ok(mut f) => {
+                    let _ = writeln!(f, "{line}");
+                }
+                Err(e) => tracing::warn!(error = %e, ?path, "could not append event line"),
+            }
+        }
+        Ok(())
+    }
+
+    async fn write_bars(&self, _bars: &[Bar]) -> Result<(), StoreError> {
+        Ok(()) // dropped in memory mode; bars are re-fetchable
+    }
+
+    /// Reads the JSONL trail back (the only history mem mode keeps). No `EVENTS_PATH`
+    /// set ⇒ nothing was persisted ⇒ empty; a missing file ⇒ empty (nothing yet). The
+    /// file is append order = chronological, so no sort is needed.
+    async fn read_events(
+        &self,
+        strategy_id: &str,
+        symbol: &Symbol,
+    ) -> Result<Vec<Event>, StoreError> {
+        let Some(path) = &self.path else {
+            return Ok(Vec::new());
+        };
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(StoreError::Query(format!("read {path:?}: {e}"))),
+        };
+        let mut out = Vec::new();
+        for line in content.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| StoreError::Query(format!("bad event line: {e}")))?;
+            if v["strategy_id"] == strategy_id && v["symbol"] == symbol.as_str() {
+                out.push(Event {
+                    ts: v["ts"].as_i64().unwrap_or_default(),
+                    step: v["step"].as_str().unwrap_or_default().to_string(),
+                    decision_id: v["decision_id"].as_str().unwrap_or_default().to_string(),
+                    // payload was inlined as JSON when it parsed; give it back as a string.
+                    payload: match &v["payload"] {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    },
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
+// ---- ScyllaStore ------------------------------------------------------------------
 
 const MS_PER_DAY: i64 = 86_400_000;
 
@@ -257,7 +359,7 @@ fn append_fallback(path: &str, line: &str) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+mod scylla_tests {
     use super::*;
 
     // Verifies the safety-critical path that runs without Scylla: on a write
