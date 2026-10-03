@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use reqwest::StatusCode;
+use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -54,6 +55,17 @@ impl From<RawEarning> for EarningsEvent {
 #[serde(rename_all = "camelCase")]
 struct RawProfile {
     market_capitalization: Option<f64>,
+}
+
+impl RawProfile {
+    /// Finnhub reports market cap in **millions** of USD; 0 means "no figure".
+    /// Convert to Decimal first, then scale, so 1234.567 → 1_234_567_000 exactly.
+    fn market_cap_usd(self) -> Option<Decimal> {
+        self.market_capitalization
+            .filter(|m| *m > 0.0)
+            .and_then(Decimal::from_f64)
+            .map(|m| m * Decimal::from(1_000_000))
+    }
 }
 
 pub struct FinnhubClient {
@@ -150,21 +162,46 @@ impl FundamentalSource for FinnhubClient {
     }
 
     async fn market_cap(&self, symbol: &Symbol) -> Result<Option<Decimal>, FundamentalError> {
-        // self.get_json::<RawProfile>("/stock/profile2", &[("symbol", symbol.0.clone())])
-        // marketCapitalization is in millions USD → multiply before Decimal.
-        let _ = (
-            symbol,
-            RawProfile {
-                market_capitalization: None,
-            },
-        );
-        todo!("DATA-8: market cap")
+        let params = [("symbol", symbol.0.clone())];
+        let parsed: RawProfile = self.get_json("/stock/profile2", &params).await?;
+        Ok(parsed.market_cap_usd())
+    }
+}
+
+/// In-memory `FundamentalSource` for tests of whatever consumes the port
+/// (screener, commentary agent, report). Holds a fixed calendar and cap table;
+/// `earnings_calendar` filters by date range the way the vendor would.
+#[cfg(test)]
+pub struct MemFundamentals {
+    pub events: Vec<EarningsEvent>,
+    pub caps: std::collections::HashMap<Symbol, Decimal>,
+}
+
+#[cfg(test)]
+#[async_trait]
+impl FundamentalSource for MemFundamentals {
+    async fn earnings_calendar(
+        &self,
+        from: NaiveDate,
+        to: NaiveDate,
+    ) -> Result<Vec<EarningsEvent>, FundamentalError> {
+        Ok(self
+            .events
+            .iter()
+            .filter(|e| e.date >= from && e.date <= to)
+            .cloned()
+            .collect())
+    }
+
+    async fn market_cap(&self, symbol: &Symbol) -> Result<Option<Decimal>, FundamentalError> {
+        Ok(self.caps.get(symbol).copied())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal_macros::dec;
 
     /// Shape of a real `/calendar/earnings` response, trimmed to the fields we
     /// read. Row 4 has no `hour` key at all, which exercises `#[serde(default)]`.
@@ -213,5 +250,67 @@ mod tests {
             Err(FundamentalError::MissingKey("FINNHUB_KEY"))
         ));
         assert!(FinnhubClient::new("abc".into()).is_ok());
+    }
+
+    fn profile(json: &str) -> RawProfile {
+        serde_json::from_str(json).expect("profile parses")
+    }
+
+    #[test]
+    fn market_cap_is_millions_to_dollars() {
+        assert_eq!(
+            profile(r#"{"marketCapitalization": 1234.5}"#).market_cap_usd(),
+            Some(dec!(1_234_500_000))
+        );
+    }
+
+    #[test]
+    fn market_cap_scales_in_decimal_not_f64() {
+        // 1234.567 * 1e6 in f64 is 1234566999.9999998; Decimal math keeps it exact.
+        assert_eq!(
+            profile(r#"{"marketCapitalization": 1234.567}"#).market_cap_usd(),
+            Some(dec!(1_234_567_000))
+        );
+    }
+
+    #[test]
+    fn missing_or_zero_market_cap_is_none() {
+        assert_eq!(
+            profile(r#"{"name": "X", "ticker": "X"}"#).market_cap_usd(),
+            None
+        );
+        assert_eq!(
+            profile(r#"{"marketCapitalization": 0}"#).market_cap_usd(),
+            None
+        );
+        assert_eq!(
+            profile(r#"{"marketCapitalization": null}"#).market_cap_usd(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn mem_fake_filters_by_range_and_looks_up_caps() {
+        let d = |day| NaiveDate::from_ymd_opt(2026, 10, day).unwrap();
+        let ev = |sym: &str, day| EarningsEvent {
+            symbol: Symbol::from(sym),
+            date: d(day),
+            earnings_hour: None,
+            eps_estimate: None,
+        };
+        let fake = MemFundamentals {
+            events: vec![ev("A", 1), ev("B", 5), ev("C", 9)],
+            caps: [(Symbol::from("A"), dec!(1_000_000_000))]
+                .into_iter()
+                .collect(),
+        };
+        let got = fake.earnings_calendar(d(2), d(8)).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].symbol, Symbol::from("B"));
+        assert_eq!(
+            fake.market_cap(&Symbol::from("A")).await.unwrap(),
+            Some(dec!(1_000_000_000))
+        );
+        assert_eq!(fake.market_cap(&Symbol::from("Z")).await.unwrap(), None);
     }
 }
