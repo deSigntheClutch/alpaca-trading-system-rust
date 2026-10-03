@@ -43,6 +43,8 @@ pub struct Config {
     pub alpaca_key: String,
     pub alpaca_secret: String,
     pub anthropic_key: String,
+    /// Finnhub (earnings calendar, market cap). Empty until the morning binary needs it.
+    pub finnhub_key: String,
     /// Trading REST base. Paper by default.
     pub alpaca_trade_base: String,
     /// Market-data REST base (historical bars). Not the trading base.
@@ -100,6 +102,7 @@ impl Config {
             alpaca_key: env("ALPACA_KEY"),
             alpaca_secret: env("ALPACA_SECRET"),
             anthropic_key: env("ANTHROPIC_API_KEY"),
+            finnhub_key: env("FINNHUB_KEY"),
             alpaca_trade_base: base,
             alpaca_data_base: data_base,
             alpaca_data_ws: data_ws,
