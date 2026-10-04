@@ -13,7 +13,7 @@ export function PickDetail({ pick, asOf, onClose }: { pick: Pick; asOf: number; 
         <strong>
           <code>{s.symbol}</code> {s.name}
         </strong>
-        <span className="chip">{s.sector}</span>
+        <span className="dim">{s.sector}</span>
         {s.themes.map((t) => (
           <span key={t} className="tag">
             {t}

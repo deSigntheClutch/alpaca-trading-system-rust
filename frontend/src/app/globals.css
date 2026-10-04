@@ -177,3 +177,19 @@ button.linkish {
 .seg-btn:disabled { opacity: 0.5; cursor: default; }
 .scroll { overflow-x: auto; }
 details > summary { cursor: pointer; margin: 8px 0 4px; }
+
+/* numbered section headers, matching the page guide */
+.sec { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 22px 0 8px; }
+.sec h2 { font-size: 16px; margin: 0; }
+.sec-n {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%; background: #d9480f; color: #fff;
+  font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; align-self: center;
+}
+
+/* top navigation, shared by every page */
+.nav { display: flex; align-items: center; gap: 4px; padding: 10px 20px; background: #fff; border-bottom: 1px solid #e6e6e6; }
+.nav-brand { font-weight: 600; color: #444; margin-right: 12px; font-size: 13px; }
+.nav a { padding: 6px 12px; border-radius: 8px; color: #444; text-decoration: none; font-size: 13.5px; }
+.nav a:hover { background: #f4f6ff; }
+.nav a.on { background: #2962ff; color: #fff; }

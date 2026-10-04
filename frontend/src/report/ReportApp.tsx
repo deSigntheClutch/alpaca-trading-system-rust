@@ -22,6 +22,20 @@ type View =
   | { kind: 'report'; report: MorningReport }
   | { kind: 'replay'; reply: ScreenReply }
 
+/**
+ * Section header. The numbers match the page guide (1 date … 7 run) so the two can
+ * be read side by side; the Chinese subtitle says what the block is for.
+ */
+function Section({ n, title, sub }: { n: number; title: string; sub: string }) {
+  return (
+    <div className="sec">
+      <span className="sec-n">{n}</span>
+      <h2>{title}</h2>
+      <span className="dim">{sub}</span>
+    </div>
+  )
+}
+
 /** A replayed `Scored` wearing the `Pick` shape, so one table renders both. */
 function asPick(scored: Scored): Pick {
   return { scored, earnings: null, headlines: [], commentary: null }
@@ -80,11 +94,9 @@ export function ReportApp() {
       <header className="row">
         <h1>Morning report</h1>
         <span className="dim">rule picks the names · scorecard says whether it worked</span>
-        <a className="right dim" href="/backtest/">
-          backtest →
-        </a>
       </header>
 
+      <Section n={1} title="Morning" sub="选哪一天的报告 · 没有存报告的日子会当场回放" />
       <div className="panel">
         <div className="panel-row">
           <span className="panel-label">Morning</span>
@@ -146,12 +158,22 @@ export function ReportApp() {
             )}
           </div>
 
+          <Section n={2} title="Regime" sub="大盘状态 · SPY 对 200 日均线" />
           <RegimeBanner regime={regime} />
 
-          {view.kind === 'report' && view.report.scorecard && <ScorecardPanel scorecard={view.report.scorecard} />}
+          {view.kind === 'report' && view.report.scorecard && (
+            <>
+              <Section n={3} title="Scorecard" sub="命中率 · 过去每份报告的候选 vs 之后走势 vs SPY" />
+              <ScorecardPanel scorecard={view.report.scorecard} />
+            </>
+          )}
 
+          <Section n={4} title="Picks" sub="今天的候选 · 规则选出的前 8 只,ETF 不算 · 点一行看详情" />
           <PicksTable picks={picks} selected={selected} onSelect={setSelected} />
 
+          {current && (
+            <Section n={5} title="Detail" sub={`详情 · ${current.scored.symbol} 的指标、AI 解读、新闻、价格图`} />
+          )}
           {current && (
             <PickDetail
               pick={current}
@@ -160,8 +182,16 @@ export function ReportApp() {
             />
           )}
 
-          {screenLike && <Aggregates bySector={screenLike.by_sector} byTheme={screenLike.by_theme} />}
+          {screenLike && (
+            <>
+              <Section n={6} title="By sector / theme" sub="分组平均分 · n 是组里有几只,n=1 就是那一只自己的分" />
+              <Aggregates bySector={screenLike.by_sector} byTheme={screenLike.by_theme} />
+            </>
+          )}
 
+          {view.kind === 'report' && (
+            <Section n={7} title="Run" sub="这次运行 · 耗时、LLM 花费、警告、没打分的名字" />
+          )}
           {view.kind === 'report' && (
             <footer className="hint">
               <div>
