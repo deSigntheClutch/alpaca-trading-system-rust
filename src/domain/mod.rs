@@ -4,6 +4,7 @@
 pub mod config;
 pub mod dto; // wire DTOs for the web API + ts-rs frontend types
 pub mod error;
+pub mod report; // the morning report and its parts (ts-rs exported)
 pub mod signals;
 pub mod types;
 pub mod universe; // config/universe.csv → Instrument / Universe

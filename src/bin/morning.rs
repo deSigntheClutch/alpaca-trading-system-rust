@@ -1,28 +1,50 @@
-//! `morning` — the daily report, built up step by step. Today: regime line and the
-//! screener (#61, #64), printed as a table or dumped as JSON. The earnings, news,
-//! LLM commentary, scorecard and report file arrive with #65-#68.
+//! `morning` — the daily report. Today it assembles and writes the `MorningReport`
+//! (#67): regime line, screener picks, each pick's earnings date and last-24h
+//! headlines, sector and theme roll-ups. Commentary arrives with #66, the scorecard
+//! with #35, the step-by-step hardening with #68.
 //!
-//!     cargo run --release --bin morning
-//!     cargo run --release --bin morning -- --top 10 --json > screen.json
+//!     cargo run --release --bin morning                 # writes data/reports/<date>.json + latest.json
+//!     cargo run --release --bin morning -- --top 10 --json
 //!
 //! Reads bars through `LocalBars`, so run `backfill --universe config/universe.csv`
-//! once first; after that a run is a second or two and makes no requests.
+//! once first; after that a run is a second or two plus the earnings and news calls.
+//! Earnings and news fail soft: a missing key or a vendor error becomes a line in
+//! `run.warnings`, never a missing report.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Context as _;
+use chrono::{Duration, NaiveDate, Utc};
 use clap::Parser;
+use futures::future::join_all;
 
 use alpaca_trading_system::domain::config::Config;
-use alpaca_trading_system::domain::types::Symbol;
+use alpaca_trading_system::domain::report::{MorningReport, Pick, RunStats};
+use alpaca_trading_system::domain::types::{EarningsEvent, Headline, Symbol};
 use alpaca_trading_system::domain::universe::Universe;
 use alpaca_trading_system::engine::regime;
 use alpaca_trading_system::engine::screener::{self, ScreenerConfig};
-use alpaca_trading_system::infra::{AlpacaBars, AlpacaClient, BarFileStore, LocalBars};
+use alpaca_trading_system::infra::{
+    AlpacaBars, AlpacaClient, AlpacaNews, BarFileStore, FinnhubClient, LocalBars, ReportStore,
+};
+use alpaca_trading_system::traits::{FundamentalSource, NewsSource};
+
+/// Headlines kept per pick, and the look-back. 72 hours, not 24: the report runs
+/// before the open, and on a Monday (or the day after a holiday) the last 24 hours
+/// hold nothing — the feed showed zero items for every pick on a Saturday morning.
+/// Three days always reaches the previous session; "newest first, five per name"
+/// keeps a weekday report from filling with stale items.
+const HEADLINES_PER_PICK: usize = 5;
+const NEWS_LOOKBACK_HOURS: i64 = 72;
+/// A headline tagged with more symbols than this is a market wrap, not news about
+/// the name; it only fills in when nothing more specific exists.
+const SPECIFIC_MAX_SYMBOLS: usize = 3;
 
 #[derive(Parser, Debug)]
-#[command(about = "Score the universe and print today's candidates")]
+#[command(about = "Score the universe and write today's morning report")]
 struct Args {
     #[arg(long, default_value = "config/universe.csv")]
     universe: PathBuf,
@@ -35,9 +57,14 @@ struct Args {
     /// Regime index.
     #[arg(long, default_value = regime::DEFAULT_SYMBOL)]
     regime_symbol: String,
+    /// Report date (UTC). Default today.
+    #[arg(long)]
+    date: Option<NaiveDate>,
     #[arg(long, default_value = "data/bars")]
     bars: PathBuf,
-    /// Print the full `Screen` as JSON instead of the table.
+    #[arg(long, default_value = "data/reports")]
+    out: PathBuf,
+    /// Print the report as JSON to stdout as well.
     #[arg(long)]
     json: bool,
 }
@@ -52,6 +79,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
+    let t0 = Instant::now();
+    let mut warnings: Vec<String> = Vec::new();
 
     let universe = Universe::load(&args.universe)
         .with_context(|| format!("load universe {}", args.universe.display()))?;
@@ -64,92 +93,228 @@ async fn main() -> anyhow::Result<()> {
     ));
     let bars = Arc::new(LocalBars::new(
         Arc::new(BarFileStore::new(args.bars.clone())),
-        AlpacaBars::new(alpaca),
+        AlpacaBars::new(alpaca.clone()),
     ));
+    let date = args.date.unwrap_or_else(|| Utc::now().date_naive());
 
+    // 1. Regime and screen share nothing: run them together.
     let regime_symbol = Symbol::from(args.regime_symbol.as_str());
     let screener_cfg = ScreenerConfig {
         top_n: args.top,
         bar_window: args.window,
         ..Default::default()
     };
-    // The regime read and the 165-name screen share nothing; run them together.
     let (regime, screen) = tokio::join!(
         regime::regime(&*bars, &regime_symbol, regime::DEFAULT_WINDOW),
         screener::screen(bars.clone(), &universe, &screener_cfg),
     );
-    let regime = regime.with_context(|| format!("regime bars for {regime_symbol}"))?;
+    let regime = match regime {
+        Ok(r) => r,
+        Err(e) => {
+            warnings.push(format!("regime unavailable: {e}"));
+            None
+        }
+    };
 
+    // 2. Earnings for the whole universe and headlines for the picks, together.
+    let in_universe: HashSet<Symbol> = universe.symbols().cloned().collect();
+    let news = AlpacaNews::new(alpaca.clone());
+    let since = Utc::now().timestamp_millis() - NEWS_LOOKBACK_HOURS * 3_600_000;
+    let (earnings, headlines) = tokio::join!(
+        earnings_this_week(cfg.finnhub_key.clone(), date, &in_universe),
+        join_all(screen.picks.iter().map(|p| news.headlines(
+            std::slice::from_ref(&p.symbol),
+            since,
+            25
+        ))),
+    );
+    let earnings = earnings.unwrap_or_else(|w| {
+        warnings.push(w);
+        Vec::new()
+    });
+
+    let picks: Vec<Pick> = screen
+        .picks
+        .iter()
+        .cloned()
+        .zip(headlines)
+        .map(|(scored, heads)| {
+            let heads = match heads {
+                Ok(h) => select_headlines(h),
+                Err(e) => {
+                    warnings.push(format!("news for {}: {e}", scored.symbol));
+                    Vec::new()
+                }
+            };
+            Pick {
+                earnings: earnings.iter().find(|e| e.symbol == scored.symbol).cloned(),
+                headlines: heads,
+                commentary: None,
+                scored,
+            }
+        })
+        .collect();
+
+    let report = MorningReport {
+        date,
+        generated_at: Utc::now().timestamp_millis(),
+        regime,
+        picks,
+        earnings_this_week: earnings,
+        by_sector: screen.by_sector,
+        by_theme: screen.by_theme,
+        skipped: screen.skipped,
+        universe_size: universe.len(),
+        run: RunStats {
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+            warnings,
+            ..Default::default()
+        },
+    };
+
+    let path = ReportStore::new(&args.out).write(&report)?;
+    print_summary(&report, &path);
     if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(
-                &serde_json::json!({ "regime": regime, "screen": screen })
-            )?
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+    Ok(())
+}
+
+/// Universe names reporting in `[date, date + 7)`, soonest first. `Err` carries the
+/// warning text; the caller decides that an empty section beats no report.
+async fn earnings_this_week(
+    key: String,
+    date: NaiveDate,
+    in_universe: &HashSet<Symbol>,
+) -> Result<Vec<EarningsEvent>, String> {
+    let finnhub = FinnhubClient::new(key).map_err(|e| format!("earnings skipped: {e}"))?;
+    let mut events: Vec<EarningsEvent> = finnhub
+        .earnings_calendar(date, date + Duration::days(7))
+        .await
+        .map_err(|e| format!("earnings skipped: {e}"))?
+        .into_iter()
+        .filter(|e| in_universe.contains(&e.symbol))
+        .collect();
+    events.sort_by(|a, b| {
+        a.date
+            .cmp(&b.date)
+            .then_with(|| a.symbol.as_str().cmp(b.symbol.as_str()))
+    });
+    Ok(events)
+}
+
+/// Prefer items about this name over market wraps that merely tag it, then newest
+/// first, at most `HEADLINES_PER_PICK`.
+fn select_headlines(mut heads: Vec<Headline>) -> Vec<Headline> {
+    heads.sort_by(|a, b| {
+        let (sa, sb) = (
+            a.symbols.len() <= SPECIFIC_MAX_SYMBOLS,
+            b.symbols.len() <= SPECIFIC_MAX_SYMBOLS,
         );
-        return Ok(());
-    }
+        sb.cmp(&sa).then_with(|| b.ts.cmp(&a.ts))
+    });
+    heads.truncate(HEADLINES_PER_PICK);
+    heads
+}
 
-    match &regime {
-        Some(r) => println!(
-            "regime  {} {} 200d SMA  close {:.2}  sma {:.2}  {:+.1}%",
-            r.symbol,
-            if r.above { "ABOVE" } else { "BELOW" },
-            r.close,
-            r.sma,
-            r.distance_pct
+fn print_summary(r: &MorningReport, path: &std::path::Path) {
+    match &r.regime {
+        Some(g) => println!(
+            "regime   {} {} {}d SMA  close {:.2}  sma {:.2}  {:+.1}%",
+            g.symbol.as_str(),
+            if g.above { "ABOVE" } else { "BELOW" },
+            g.window,
+            g.close,
+            g.sma,
+            g.distance_pct
         ),
-        None => println!(
-            "regime  unavailable (fewer than {} bars for {regime_symbol})",
-            regime::DEFAULT_WINDOW
-        ),
+        None => println!("regime   unavailable"),
     }
     println!(
-        "screen  {} scored · {} skipped · {} ms · as of {}\n",
-        screen.ranked.len(),
-        screen.skipped.len(),
-        screen.elapsed_ms,
-        day(screen.as_of)
+        "screen   {} picks of {} names · {} skipped · {} earnings this week · {} ms",
+        r.picks.len(),
+        r.universe_size,
+        r.skipped.len(),
+        r.earnings_this_week.len(),
+        r.run.elapsed_ms
     );
-
+    println!();
     println!(
-        "{:<7} {:<24} {:<10} {:>6} {:<10} {:>5} {:>9} {:>7} {:>7}",
-        "sym", "name", "sector", "score", "rating", "rsi", "close", "5d", "20d"
+        "{:<7} {:<22} {:<10} {:>6} {:<9} {:>8} {:>6} {:>6}  {:<10} news",
+        "sym", "name", "sector", "score", "rating", "close", "5d", "20d", "earnings"
     );
-    for s in &screen.picks {
+    for p in &r.picks {
+        let s = &p.scored;
         println!(
-            "{:<7} {:<24} {:<10} {:>6.2} {:<10} {:>5.0} {:>9.2} {:>6.1}% {:>6.1}%",
+            "{:<7} {:<22} {:<10} {:>6.2} {:<9} {:>8.2} {:>5.1}% {:>5.1}%  {:<10} {}",
             s.symbol.as_str(),
-            trunc(&s.name, 24),
+            trunc(&s.name, 22),
             trunc(&s.sector, 10),
             s.score,
             format!("{:?}", s.rating),
-            s.rsi,
             s.close,
             s.change_5d.map_or(0.0, |c| c * 100.0),
             s.change_20d.map_or(0.0, |c| c * 100.0),
+            p.earnings
+                .as_ref()
+                .map_or("-".to_string(), |e| e.date.to_string()),
+            p.headlines.len(),
         );
     }
-
-    println!("\nby theme (mean score, n)");
-    for a in screen.by_theme.iter().take(8) {
-        println!("  {:<16} {:>+5.2}  {}", a.key, a.mean_score, a.count);
-    }
-    if !screen.skipped.is_empty() {
-        println!("\nskipped");
-        for k in &screen.skipped {
-            println!("  {:<7} {}", k.symbol.as_str(), k.reason);
+    if !r.earnings_this_week.is_empty() {
+        println!("\nearnings this week");
+        for e in r.earnings_this_week.iter().take(12) {
+            println!(
+                "  {} {:<7} {:?}",
+                e.date,
+                e.symbol.as_str(),
+                e.earnings_hour
+            );
         }
     }
-    Ok(())
+    for w in &r.run.warnings {
+        println!("warning  {w}");
+    }
+    println!("\nwrote {}", path.display());
 }
 
 fn trunc(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-fn day(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|t| t.format("%Y-%m-%d").to_string())
-        .unwrap_or_else(|| ms.to_string())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn h(id: u64, ts: i64, n_syms: usize) -> Headline {
+        Headline {
+            id,
+            ts,
+            headline: format!("h{id}"),
+            source: "t".into(),
+            url: None,
+            symbols: (0..n_syms)
+                .map(|i| Symbol::from(format!("S{i}").as_str()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn specific_headlines_beat_market_wraps_then_newest_first() {
+        let got = select_headlines(vec![
+            h(1, 500, 12),
+            h(2, 100, 1),
+            h(3, 300, 3),
+            h(4, 400, 8),
+            h(5, 200, 2),
+            h(6, 50, 1),
+            h(7, 10, 1),
+        ]);
+        let ids: Vec<u64> = got.iter().map(|x| x.id).collect();
+        assert_eq!(
+            ids,
+            vec![3, 5, 2, 6, 7],
+            "five kept: the specific ones newest first; the wraps (1, 4) dropped"
+        );
+    }
 }

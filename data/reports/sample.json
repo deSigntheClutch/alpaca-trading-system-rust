@@ -1,0 +1,1285 @@
+{
+  "date": "2026-10-04",
+  "generated_at": 1791092683916,
+  "regime": {
+    "symbol": "SPY",
+    "as_of": 1790913600000,
+    "close": 769.64,
+    "sma": 717.0292999999998,
+    "window": 200,
+    "above": true,
+    "distance_pct": 7.337315225472674
+  },
+  "picks": [
+    {
+      "scored": {
+        "symbol": "PANW",
+        "name": "Palo Alto Networks",
+        "sector": "software",
+        "themes": [
+          "cybersecurity",
+          "ai"
+        ],
+        "region": "US",
+        "is_etf": false,
+        "score": 0.6279654804744768,
+        "rating": "StrongBuy",
+        "rsi": 64.6441423430628,
+        "close": 403.24,
+        "change_1d": 0.017640378548895885,
+        "change_5d": 0.0760527298927256,
+        "change_20d": 0.21479785503404236,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62134462,
+          "ts": 1790949424000,
+          "headline": "TD Cowen Maintains Buy on Palo Alto Networks, Raises Price Target to $440",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/news/26/10/62134462/td-cowen-maintains-buy-palo-alto-networks-raises-price-target-440",
+          "symbols": [
+            "PANW"
+          ]
+        }
+      ],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "GME",
+        "name": "GameStop",
+        "sector": "retail",
+        "themes": [
+          "gaming",
+          "meme",
+          "bitcoin"
+        ],
+        "region": "US",
+        "is_etf": false,
+        "score": 0.5979462875197471,
+        "rating": "StrongBuy",
+        "rsi": 68.24644549763035,
+        "close": 24.7,
+        "change_1d": 0.024471173786810407,
+        "change_5d": 0.056006840530141044,
+        "change_20d": 0.2844513780551221,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62149419,
+          "ts": 1790975203000,
+          "headline": "GameStop CEO Ryan Cohen Reports Open Market Purchase Of 700,000 Co's Class A Shares On Oct 2 At $24.4061/Share",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/news/26/10/62149419/gamestop-ceo-ryan-cohen-reports-open-market-purchase-700-000-co-s-class-shares-oct-2-24-4061-share",
+          "symbols": [
+            "GME"
+          ]
+        }
+      ],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "RKLB",
+        "name": "Rocket Lab",
+        "sector": "industrial",
+        "themes": [
+          "space",
+          "defense"
+        ],
+        "region": "US",
+        "is_etf": false,
+        "score": 0.5907563025210083,
+        "rating": "StrongBuy",
+        "rsi": 69.109243697479,
+        "close": 73.92,
+        "change_1d": 0.049105875674141375,
+        "change_5d": -0.00040567951318459805,
+        "change_20d": 0.15843911612599904,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62139863,
+          "ts": 1790956984000,
+          "headline": "Why Is Rocket Lab Stock Surging on Friday?",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/trading-ideas/movers/26/10/62139863/why-is-rocket-lab-stock-surging-on-friday",
+          "symbols": [
+            "RKLB"
+          ]
+        },
+        {
+          "id": 62097715,
+          "ts": 1790835474000,
+          "headline": "Reported Earlier, Rocket Lab Signs Multi-Year Deal To Launch 20 StriX Satellites For Synspective's Constellation, With Remaining Contract Terms Undisclosed",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/quote/RKLB",
+          "symbols": [
+            "RKLB"
+          ]
+        },
+        {
+          "id": 62142882,
+          "ts": 1790962536000,
+          "headline": "Cathie Wood Is Buying Rocket Lab Again: Why 3 ARK ETFs Are Betting on Neutron",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/etfs/sector-etfs/26/10/62142882/cathie-wood-buying-rocket-lab-again-why-3-ark-etfs-are-betting-on-neutron",
+          "symbols": [
+            "ARKK",
+            "ARKQ",
+            "ARKX",
+            "PLTR",
+            "RKLB"
+          ]
+        },
+        {
+          "id": 62142865,
+          "ts": 1790962513000,
+          "headline": "10 Industrials Stocks Whale Activity In Today’s Session",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/markets/options/26/10/62142865/10-industrials-stocks-whale-activity-today-s-session",
+          "symbols": [
+            "AVAV",
+            "BA",
+            "BE",
+            "BLDR",
+            "DE",
+            "EME",
+            "GEV",
+            "HONA",
+            "RKLB",
+            "WM"
+          ]
+        },
+        {
+          "id": 62105681,
+          "ts": 1790860569000,
+          "headline": "Rocket Lab’s 20-Launch Synspective Deal Pushes Backlog Above 100 Missions",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/news/space/26/10/62105681/rocket-labs-20-launch-synspective-deal-pushes-backlog-above-100-missions",
+          "symbols": [
+            "ARKQ",
+            "ARKX",
+            "NASA",
+            "RKLB"
+          ]
+        }
+      ],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "SHOP",
+        "name": "Shopify",
+        "sector": "software",
+        "themes": [
+          "e-commerce",
+          "ai"
+        ],
+        "region": "CA",
+        "is_etf": false,
+        "score": 0.5883222468588322,
+        "rating": "StrongBuy",
+        "rsi": 69.40133037694014,
+        "close": 151.39,
+        "change_1d": 0.015426923334898257,
+        "change_5d": 0.06425307557117743,
+        "change_20d": 0.03777077049629818,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62125351,
+          "ts": 1790898437000,
+          "headline": "$100 Invested In Shopify 10 Years Ago Would Be Worth This Much Today",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/news/26/10/62125351/100-invested-shopify-10-years-ago-would-be-worth-much-today",
+          "symbols": [
+            "SHOP"
+          ]
+        }
+      ],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "BB",
+        "name": "BlackBerry",
+        "sector": "software",
+        "themes": [
+          "cybersecurity",
+          "auto"
+        ],
+        "region": "CA",
+        "is_etf": false,
+        "score": 0.5680751173708918,
+        "rating": "StrongBuy",
+        "rsi": 71.83098591549299,
+        "close": 9.3,
+        "change_1d": 0.013071895424836777,
+        "change_5d": 0.1327649208282582,
+        "change_20d": 0.20779220779220786,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "BIRD",
+        "name": "Smartbird",
+        "sector": "consumer",
+        "themes": [
+          "apparel"
+        ],
+        "region": "US",
+        "is_etf": false,
+        "score": 0.555858310626703,
+        "rating": "StrongBuy",
+        "rsi": 73.29700272479565,
+        "close": 3.365,
+        "change_1d": -0.035816618911174825,
+        "change_5d": 0.4504310344827589,
+        "change_20d": 0.36788617886178865,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62116026,
+          "ts": 1790874368000,
+          "headline": "12 Consumer Discretionary Stocks Moving In Thursday's Intraday Session",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/trading-ideas/movers/26/10/62116026/12-consumer-discretionary-stocks-moving-thursday-s-intraday-session",
+          "symbols": [
+            "BIRD",
+            "DBGI",
+            "EEIQ",
+            "EJH",
+            "GYGY",
+            "MYND",
+            "NCI",
+            "PUSA",
+            "SEV",
+            "SMJF",
+            "VIOT",
+            "YHGJ"
+          ]
+        }
+      ],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "CRWD",
+        "name": "CrowdStrike",
+        "sector": "software",
+        "themes": [
+          "cybersecurity",
+          "cloud",
+          "ai"
+        ],
+        "region": "US",
+        "is_etf": false,
+        "score": 0.5541542356025675,
+        "rating": "StrongBuy",
+        "rsi": 73.5014917276919,
+        "close": 270.04,
+        "change_1d": 0.014844601450637152,
+        "change_5d": 0.07103478364335869,
+        "change_20d": 0.2561752802716659,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62137516,
+          "ts": 1790953222000,
+          "headline": "CoreWeave Unleashes Nvidia's Vera Rubin, Analyst Sees Room to Run",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/analyst-stock-ratings/analyst-color/26/10/62137516/coreweave-unleashes-nvidias-vera-rubin-analyst-sees-room-to-run",
+          "symbols": [
+            "CRWD",
+            "CRWV",
+            "NVDA"
+          ]
+        },
+        {
+          "id": 62134392,
+          "ts": 1790949335000,
+          "headline": "TD Cowen Maintains Buy on CrowdStrike Holdings, Raises Price Target to $280",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/news/26/10/62134392/td-cowen-maintains-buy-crowdstrike-holdings-raises-price-target-280",
+          "symbols": [
+            "CRWD"
+          ]
+        },
+        {
+          "id": 62127447,
+          "ts": 1790932027000,
+          "headline": "Jim Cramer Says Investors Who Bet AI Would Destroy Software Stocks ‘Blew Up’ — Salesforce, Veeva and Palantir Led Q3 Comeback: Stocks to Watch Ahead",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/markets/equities/26/10/62127447/jim-cramer-says-investors-who-bet-ai-would-destroy-software-stocks-blew-up-salesforce-veeva-and-palantir-led-q3-comeback-stocks-to-watch-ahead",
+          "symbols": [
+            "CRM",
+            "CRWD",
+            "GLW",
+            "META",
+            "VEEV"
+          ]
+        }
+      ],
+      "commentary": null
+    },
+    {
+      "scored": {
+        "symbol": "MRNA",
+        "name": "Moderna",
+        "sector": "healthcare",
+        "themes": [
+          "biotech",
+          "mrna"
+        ],
+        "region": "US",
+        "is_etf": false,
+        "score": 0.5502434705621956,
+        "rating": "StrongBuy",
+        "rsi": 73.97078353253653,
+        "close": 190.01,
+        "change_1d": 0.005663173494230955,
+        "change_5d": -0.04459975864843124,
+        "change_20d": 0.27634849197286204,
+        "as_of": 1790913600000,
+        "bars": 60
+      },
+      "earnings": null,
+      "headlines": [
+        {
+          "id": 62126589,
+          "ts": 1790922240000,
+          "headline": "Reported Earlier, Moderna To Replace Warner Bros. Discovery In Nasdaq-100 Index Before Market Open On October 9, 2026",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/quote/WBD",
+          "symbols": [
+            "MRNA",
+            "WBD"
+          ]
+        },
+        {
+          "id": 62116814,
+          "ts": 1790875843000,
+          "headline": "Moderna Stock Is Trending: What's Going On?",
+          "source": "benzinga",
+          "url": "https://www.benzinga.com/trading-ideas/movers/26/10/62116814/moderna-stock-is-trending-whats-going-on",
+          "symbols": [
+            "MRNA"
+          ]
+        }
+      ],
+      "commentary": null
+    }
+  ],
+  "earnings_this_week": [],
+  "by_sector": [
+    {
+      "key": "semis",
+      "count": 12,
+      "mean_score": 0.22222602656770332
+    },
+    {
+      "key": "retail",
+      "count": 5,
+      "mean_score": 0.21207561799344649
+    },
+    {
+      "key": "industrial",
+      "count": 9,
+      "mean_score": 0.14067093384411225
+    },
+    {
+      "key": "software",
+      "count": 18,
+      "mean_score": 0.10970463465326047
+    },
+    {
+      "key": "hardware",
+      "count": 8,
+      "mean_score": 0.1070569306883668
+    },
+    {
+      "key": "healthcare",
+      "count": 10,
+      "mean_score": -0.019675868236390903
+    },
+    {
+      "key": "etf",
+      "count": 16,
+      "mean_score": -0.05459304469348412
+    },
+    {
+      "key": "consumer",
+      "count": 9,
+      "mean_score": -0.05751993116749857
+    },
+    {
+      "key": "travel",
+      "count": 4,
+      "mean_score": -0.13396264100828223
+    },
+    {
+      "key": "telecom",
+      "count": 1,
+      "mean_score": -0.14155237687483524
+    },
+    {
+      "key": "internet",
+      "count": 23,
+      "mean_score": -0.16575228044906778
+    },
+    {
+      "key": "fund",
+      "count": 1,
+      "mean_score": -0.17024649005781106
+    },
+    {
+      "key": "media",
+      "count": 6,
+      "mean_score": -0.20496964318802482
+    },
+    {
+      "key": "reit",
+      "count": 3,
+      "mean_score": -0.22782904007091323
+    },
+    {
+      "key": "utilities",
+      "count": 2,
+      "mean_score": -0.2342511714092469
+    },
+    {
+      "key": "materials",
+      "count": 2,
+      "mean_score": -0.2459305902369246
+    },
+    {
+      "key": "finance",
+      "count": 12,
+      "mean_score": -0.2925374267302763
+    },
+    {
+      "key": "energy",
+      "count": 8,
+      "mean_score": -0.30875075596419377
+    },
+    {
+      "key": "crypto",
+      "count": 6,
+      "mean_score": -0.3702354052673744
+    },
+    {
+      "key": "auto",
+      "count": 6,
+      "mean_score": -0.4368015104656946
+    }
+  ],
+  "by_theme": [
+    {
+      "key": "cybersecurity",
+      "count": 4,
+      "mean_score": 0.5647960791978586
+    },
+    {
+      "key": "mrna",
+      "count": 1,
+      "mean_score": 0.5502434705621956
+    },
+    {
+      "key": "ip-licensing",
+      "count": 1,
+      "mean_score": 0.5333478680128688
+    },
+    {
+      "key": "cpu",
+      "count": 2,
+      "mean_score": 0.5048530550447424
+    },
+    {
+      "key": "custom-silicon",
+      "count": 1,
+      "mean_score": 0.5
+    },
+    {
+      "key": "water",
+      "count": 1,
+      "mean_score": 0.5
+    },
+    {
+      "key": "analog",
+      "count": 1,
+      "mean_score": 0.4913504916082907
+    },
+    {
+      "key": "industrial",
+      "count": 1,
+      "mean_score": 0.4913504916082907
+    },
+    {
+      "key": "edge",
+      "count": 2,
+      "mean_score": 0.4804845599568308
+    },
+    {
+      "key": "foundry",
+      "count": 2,
+      "mean_score": 0.46039264554533615
+    },
+    {
+      "key": "cdn",
+      "count": 1,
+      "mean_score": 0.45197963657016343
+    },
+    {
+      "key": "vr",
+      "count": 1,
+      "mean_score": 0.44323063807061747
+    },
+    {
+      "key": "diagnostics",
+      "count": 1,
+      "mean_score": 0.4146481855092365
+    },
+    {
+      "key": "space",
+      "count": 4,
+      "mean_score": 0.40471030162274746
+    },
+    {
+      "key": "neocloud",
+      "count": 1,
+      "mean_score": 0.3509760406571393
+    },
+    {
+      "key": "optical",
+      "count": 2,
+      "mean_score": 0.3499384988583072
+    },
+    {
+      "key": "gpu",
+      "count": 2,
+      "mean_score": 0.3344722634392265
+    },
+    {
+      "key": "bitcoin",
+      "count": 2,
+      "mean_score": 0.3223787849563957
+    },
+    {
+      "key": "instruments",
+      "count": 1,
+      "mean_score": 0.31455781828538837
+    },
+    {
+      "key": "theaters",
+      "count": 1,
+      "mean_score": 0.305555132656826
+    },
+    {
+      "key": "servers",
+      "count": 2,
+      "mean_score": 0.27823857084953324
+    },
+    {
+      "key": "genomics",
+      "count": 2,
+      "mean_score": 0.2692409809736271
+    },
+    {
+      "key": "mobile",
+      "count": 2,
+      "mean_score": 0.23407562304853083
+    },
+    {
+      "key": "satellite",
+      "count": 1,
+      "mean_score": 0.22452010070920003
+    },
+    {
+      "key": "apparel",
+      "count": 3,
+      "mean_score": 0.22210448722698306
+    },
+    {
+      "key": "data",
+      "count": 2,
+      "mean_score": 0.21449682492522282
+    },
+    {
+      "key": "dtc",
+      "count": 1,
+      "mean_score": 0.19352536147951155
+    },
+    {
+      "key": "telehealth",
+      "count": 1,
+      "mean_score": 0.19352536147951155
+    },
+    {
+      "key": "memory",
+      "count": 3,
+      "mean_score": 0.17728937147625914
+    },
+    {
+      "key": "chemicals",
+      "count": 1,
+      "mean_score": 0.17150798156745023
+    },
+    {
+      "key": "printing",
+      "count": 1,
+      "mean_score": 0.17150798156745023
+    },
+    {
+      "key": "warehouse-club",
+      "count": 1,
+      "mean_score": 0.1484748268847198
+    },
+    {
+      "key": "semis",
+      "count": 1,
+      "mean_score": 0.14617211241577505
+    },
+    {
+      "key": "social",
+      "count": 4,
+      "mean_score": 0.1377941094825897
+    },
+    {
+      "key": "auto",
+      "count": 4,
+      "mean_score": 0.13683043998403877
+    },
+    {
+      "key": "consumer-electronics",
+      "count": 3,
+      "mean_score": 0.13311818103049816
+    },
+    {
+      "key": "ads",
+      "count": 5,
+      "mean_score": 0.12144948852447986
+    },
+    {
+      "key": "photonics",
+      "count": 2,
+      "mean_score": 0.11826058485573841
+    },
+    {
+      "key": "korea",
+      "count": 1,
+      "mean_score": 0.11240698171889918
+    },
+    {
+      "key": "hydrogen",
+      "count": 1,
+      "mean_score": 0.08948802587535729
+    },
+    {
+      "key": "industrial-gases",
+      "count": 1,
+      "mean_score": 0.08948802587535729
+    },
+    {
+      "key": "networking",
+      "count": 3,
+      "mean_score": 0.08781506186004422
+    },
+    {
+      "key": "defense",
+      "count": 7,
+      "mean_score": 0.08773542106258156
+    },
+    {
+      "key": "yen",
+      "count": 1,
+      "mean_score": 0.08460513610654113
+    },
+    {
+      "key": "hotels",
+      "count": 1,
+      "mean_score": 0.081894499288581
+    },
+    {
+      "key": "cloud",
+      "count": 13,
+      "mean_score": 0.07159257052433454
+    },
+    {
+      "key": "nasdaq-100",
+      "count": 1,
+      "mean_score": 0.06800107344634715
+    },
+    {
+      "key": "tech",
+      "count": 1,
+      "mean_score": 0.06800107344634715
+    },
+    {
+      "key": "gaming",
+      "count": 5,
+      "mean_score": 0.05265424218114807
+    },
+    {
+      "key": "exchange",
+      "count": 1,
+      "mean_score": 0.04681128239304432
+    },
+    {
+      "key": "ai",
+      "count": 46,
+      "mean_score": 0.045015670152591676
+    },
+    {
+      "key": "nand",
+      "count": 1,
+      "mean_score": 0.03359281695368996
+    },
+    {
+      "key": "storage",
+      "count": 1,
+      "mean_score": 0.03359281695368996
+    },
+    {
+      "key": "meme",
+      "count": 6,
+      "mean_score": 0.031183608040895445
+    },
+    {
+      "key": "japan",
+      "count": 1,
+      "mean_score": 0.024550316764504407
+    },
+    {
+      "key": "net-lease",
+      "count": 1,
+      "mean_score": 0.01907784258804139
+    },
+    {
+      "key": "equity-index",
+      "count": 6,
+      "mean_score": 0.017233066804042175
+    },
+    {
+      "key": "restaurants",
+      "count": 3,
+      "mean_score": 0.010700930840522946
+    },
+    {
+      "key": "currency",
+      "count": 2,
+      "mean_score": 0.003956339813426385
+    },
+    {
+      "key": "airline",
+      "count": 1,
+      "mean_score": -0.00040855871233575966
+    },
+    {
+      "key": "ar",
+      "count": 1,
+      "mean_score": -0.012221972866653441
+    },
+    {
+      "key": "biotech",
+      "count": 4,
+      "mean_score": -0.015225909787666914
+    },
+    {
+      "key": "datacenter",
+      "count": 16,
+      "mean_score": -0.015612498519223
+    },
+    {
+      "key": "variety-stores",
+      "count": 1,
+      "mean_score": -0.0213107581922371
+    },
+    {
+      "key": "sp500",
+      "count": 3,
+      "mean_score": -0.03385332370183256
+    },
+    {
+      "key": "marketplace",
+      "count": 1,
+      "mean_score": -0.050127668145542426
+    },
+    {
+      "key": "cannabis",
+      "count": 1,
+      "mean_score": -0.05544113301899235
+    },
+    {
+      "key": "parks",
+      "count": 1,
+      "mean_score": -0.05570054379816419
+    },
+    {
+      "key": "ridesharing",
+      "count": 2,
+      "mean_score": -0.06848189638900698
+    },
+    {
+      "key": "dollar",
+      "count": 1,
+      "mean_score": -0.07669245647968836
+    },
+    {
+      "key": "options-income",
+      "count": 1,
+      "mean_score": -0.07793845020625756
+    },
+    {
+      "key": "pc",
+      "count": 2,
+      "mean_score": -0.081113098206881
+    },
+    {
+      "key": "grid",
+      "count": 1,
+      "mean_score": -0.0892664097741273
+    },
+    {
+      "key": "power-electronics",
+      "count": 1,
+      "mean_score": -0.0892664097741273
+    },
+    {
+      "key": "collaboration",
+      "count": 1,
+      "mean_score": -0.09554439281509933
+    },
+    {
+      "key": "big-box",
+      "count": 1,
+      "mean_score": -0.09889826932889659
+    },
+    {
+      "key": "search",
+      "count": 3,
+      "mean_score": -0.10805138919739969
+    },
+    {
+      "key": "vaping",
+      "count": 1,
+      "mean_score": -0.11167078079480407
+    },
+    {
+      "key": "saas",
+      "count": 5,
+      "mean_score": -0.11424928068025372
+    },
+    {
+      "key": "enterprise",
+      "count": 1,
+      "mean_score": -0.1148477448689039
+    },
+    {
+      "key": "energy-storage",
+      "count": 1,
+      "mean_score": -0.11757498084906874
+    },
+    {
+      "key": "robotics",
+      "count": 1,
+      "mean_score": -0.11757498084906874
+    },
+    {
+      "key": "dividend",
+      "count": 24,
+      "mean_score": -0.11824509393177622
+    },
+    {
+      "key": "pharma",
+      "count": 4,
+      "mean_score": -0.12379703885908774
+    },
+    {
+      "key": "oil-gas",
+      "count": 3,
+      "mean_score": -0.13010700039320752
+    },
+    {
+      "key": "oil",
+      "count": 2,
+      "mean_score": -0.13794549180582935
+    },
+    {
+      "key": "5g",
+      "count": 1,
+      "mean_score": -0.14155237687483524
+    },
+    {
+      "key": "online-travel",
+      "count": 1,
+      "mean_score": -0.15024711838141244
+    },
+    {
+      "key": "e-commerce",
+      "count": 11,
+      "mean_score": -0.1528669518689325
+    },
+    {
+      "key": "bonds",
+      "count": 1,
+      "mean_score": -0.16177894678598911
+    },
+    {
+      "key": "rates",
+      "count": 1,
+      "mean_score": -0.16177894678598911
+    },
+    {
+      "key": "treasuries",
+      "count": 1,
+      "mean_score": -0.16177894678598911
+    },
+    {
+      "key": "private-markets",
+      "count": 1,
+      "mean_score": -0.17024649005781106
+    },
+    {
+      "key": "venture",
+      "count": 1,
+      "mean_score": -0.17024649005781106
+    },
+    {
+      "key": "streaming",
+      "count": 4,
+      "mean_score": -0.17538920078014011
+    },
+    {
+      "key": "travel",
+      "count": 1,
+      "mean_score": -0.18200270751327546
+    },
+    {
+      "key": "printers",
+      "count": 1,
+      "mean_score": -0.19468329467041512
+    },
+    {
+      "key": "self-storage",
+      "count": 1,
+      "mean_score": -0.20256496280078118
+    },
+    {
+      "key": "mining-hardware",
+      "count": 1,
+      "mean_score": -0.20412995223206656
+    },
+    {
+      "key": "logistics",
+      "count": 1,
+      "mean_score": -0.20430157705518376
+    },
+    {
+      "key": "payments",
+      "count": 2,
+      "mean_score": -0.20959151769202744
+    },
+    {
+      "key": "china",
+      "count": 16,
+      "mean_score": -0.21286000718065068
+    },
+    {
+      "key": "platform",
+      "count": 5,
+      "mean_score": -0.22461727366941187
+    },
+    {
+      "key": "quantum",
+      "count": 2,
+      "mean_score": -0.23198606479978895
+    },
+    {
+      "key": "fintech",
+      "count": 9,
+      "mean_score": -0.23648517534773456
+    },
+    {
+      "key": "adtech",
+      "count": 2,
+      "mean_score": -0.23983622399340537
+    },
+    {
+      "key": "brokerage",
+      "count": 3,
+      "mean_score": -0.2463972767123103
+    },
+    {
+      "key": "crypto",
+      "count": 1,
+      "mean_score": -0.25246277194033734
+    },
+    {
+      "key": "renewables",
+      "count": 1,
+      "mean_score": -0.2617471628883505
+    },
+    {
+      "key": "cleanenergy",
+      "count": 4,
+      "mean_score": -0.2644011155849011
+    },
+    {
+      "key": "delivery",
+      "count": 2,
+      "mean_score": -0.2727079331356961
+    },
+    {
+      "key": "commodity",
+      "count": 5,
+      "mean_score": -0.2779477034394578
+    },
+    {
+      "key": "consulting",
+      "count": 1,
+      "mean_score": -0.2799477432904035
+    },
+    {
+      "key": "gold",
+      "count": 2,
+      "mean_score": -0.2872047784335565
+    },
+    {
+      "key": "glp1",
+      "count": 3,
+      "mean_score": -0.32172494127242063
+    },
+    {
+      "key": "sportswear",
+      "count": 1,
+      "mean_score": -0.3237108520296532
+    },
+    {
+      "key": "benefits",
+      "count": 1,
+      "mean_score": -0.3307032727808302
+    },
+    {
+      "key": "fertility",
+      "count": 1,
+      "mean_score": -0.3307032727808302
+    },
+    {
+      "key": "bank",
+      "count": 4,
+      "mean_score": -0.35007261146115576
+    },
+    {
+      "key": "design",
+      "count": 1,
+      "mean_score": -0.3516777888163357
+    },
+    {
+      "key": "robotaxi",
+      "count": 3,
+      "mean_score": -0.3603961121399603
+    },
+    {
+      "key": "voice",
+      "count": 1,
+      "mean_score": -0.36304475018153226
+    },
+    {
+      "key": "aerospace",
+      "count": 1,
+      "mean_score": -0.38030390856929813
+    },
+    {
+      "key": "luxury",
+      "count": 1,
+      "mean_score": -0.4222723913803523
+    },
+    {
+      "key": "resale",
+      "count": 1,
+      "mean_score": -0.4222723913803523
+    },
+    {
+      "key": "wealth-management",
+      "count": 1,
+      "mean_score": -0.42364380962826165
+    },
+    {
+      "key": "media",
+      "count": 1,
+      "mean_score": -0.43666949435255614
+    },
+    {
+      "key": "bnpl",
+      "count": 1,
+      "mean_score": -0.4383514681770747
+    },
+    {
+      "key": "credit-cards",
+      "count": 1,
+      "mean_score": -0.45154853986691323
+    },
+    {
+      "key": "database",
+      "count": 1,
+      "mean_score": -0.4538640757435672
+    },
+    {
+      "key": "ev",
+      "count": 7,
+      "mean_score": -0.4574511813061963
+    },
+    {
+      "key": "car-rental",
+      "count": 1,
+      "mean_score": -0.4670893862279617
+    },
+    {
+      "key": "bitcoin-mining",
+      "count": 3,
+      "mean_score": -0.48434664541139577
+    },
+    {
+      "key": "nuclear",
+      "count": 3,
+      "mean_score": -0.49686097567093884
+    },
+    {
+      "key": "mortgage",
+      "count": 1,
+      "mean_score": -0.5
+    },
+    {
+      "key": "pets",
+      "count": 1,
+      "mean_score": -0.5
+    },
+    {
+      "key": "podcasts",
+      "count": 1,
+      "mean_score": -0.5
+    },
+    {
+      "key": "radio",
+      "count": 1,
+      "mean_score": -0.5
+    },
+    {
+      "key": "silver",
+      "count": 1,
+      "mean_score": -0.539437976718517
+    },
+    {
+      "key": "holding",
+      "count": 1,
+      "mean_score": -0.5460346399270738
+    },
+    {
+      "key": "drones",
+      "count": 1,
+      "mean_score": -0.5547404651180041
+    },
+    {
+      "key": "solid-state",
+      "count": 1,
+      "mean_score": -0.5555555555555554
+    },
+    {
+      "key": "real-estate",
+      "count": 2,
+      "mean_score": -0.572845498657695
+    },
+    {
+      "key": "lithium",
+      "count": 1,
+      "mean_score": -0.5813492063492065
+    },
+    {
+      "key": "mining",
+      "count": 1,
+      "mean_score": -0.5813492063492065
+    },
+    {
+      "key": "batteries",
+      "count": 2,
+      "mean_score": -0.5879704410063461
+    },
+    {
+      "key": "ibuying",
+      "count": 1,
+      "mean_score": -0.599656357388316
+    },
+    {
+      "key": "solar",
+      "count": 2,
+      "mean_score": -0.606877489935419
+    },
+    {
+      "key": "stablecoin",
+      "count": 1,
+      "mean_score": -0.6110538255310373
+    },
+    {
+      "key": "food",
+      "count": 1,
+      "mean_score": -0.6218905472636815
+    },
+    {
+      "key": "smr",
+      "count": 2,
+      "mean_score": -0.6419138735413367
+    }
+  ],
+  "skipped": [
+    {
+      "symbol": "BYDDY",
+      "reason": "0 bars, need 21"
+    },
+    {
+      "symbol": "NTDOY",
+      "reason": "0 bars, need 21"
+    },
+    {
+      "symbol": "POAHY",
+      "reason": "0 bars, need 21"
+    },
+    {
+      "symbol": "TCEHY",
+      "reason": "0 bars, need 21"
+    }
+  ],
+  "universe_size": 165,
+  "run": {
+    "elapsed_ms": 501,
+    "warnings": [],
+    "llm_calls": 0,
+    "llm_cached": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_cost_usd": 0.0
+  }
+}

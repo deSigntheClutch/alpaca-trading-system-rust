@@ -14,12 +14,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use ts_rs::TS;
 
-use crate::domain::signals::{self, Rating};
+pub use crate::domain::report::{Aggregate, Scored, Screen, Skipped};
+use crate::domain::signals;
 use crate::domain::types::{Symbol, Timeframe};
 use crate::domain::universe::{Instrument, Universe};
 use crate::traits::BarSource;
@@ -47,64 +46,6 @@ impl Default for ScreenerConfig {
             concurrency: 8,
         }
     }
-}
-
-/// One scored name: the instrument's tags plus the signal and a few price facts the
-/// report shows next to it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "frontend/src/bindings/")]
-pub struct Scored {
-    #[ts(type = "string")]
-    pub symbol: Symbol,
-    pub name: String,
-    pub sector: String,
-    pub themes: Vec<String>,
-    pub region: String,
-    pub is_etf: bool,
-    pub score: f64,
-    pub rating: Rating,
-    pub rsi: f64,
-    pub close: f64,
-    /// Fractional changes over the last 1, 5 and 20 bars; `None` when the series is
-    /// too short for that look-back.
-    pub change_1d: Option<f64>,
-    pub change_5d: Option<f64>,
-    pub change_20d: Option<f64>,
-    /// Timestamp of the bar the score was computed on, epoch millis.
-    pub as_of: i64,
-    pub bars: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "frontend/src/bindings/")]
-pub struct Skipped {
-    #[ts(type = "string")]
-    pub symbol: Symbol,
-    pub reason: String,
-}
-
-/// Mean score of a group, with its size so a mean of one name reads as what it is.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "frontend/src/bindings/")]
-pub struct Aggregate {
-    pub key: String,
-    pub count: usize,
-    pub mean_score: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "frontend/src/bindings/")]
-pub struct Screen {
-    /// Newest bar timestamp across all scored names, epoch millis.
-    pub as_of: i64,
-    /// Every scored name, ETFs included, best score first; ties broken by symbol.
-    pub ranked: Vec<Scored>,
-    /// Top `top_n` of `ranked` excluding ETFs: the buy candidates.
-    pub picks: Vec<Scored>,
-    pub by_sector: Vec<Aggregate>,
-    pub by_theme: Vec<Aggregate>,
-    pub skipped: Vec<Skipped>,
-    pub elapsed_ms: u64,
 }
 
 /// Score the universe. Never fails as a whole: per-symbol problems go to `skipped`.
@@ -250,6 +191,7 @@ fn aggregate<'a>(pairs: impl Iterator<Item = (&'a str, f64)>) -> Vec<Aggregate> 
 mod tests {
     use super::*;
     use crate::domain::error::MarketError;
+    use crate::domain::signals::Rating;
     use crate::domain::types::Bar;
     use async_trait::async_trait;
 

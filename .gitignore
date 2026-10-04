@@ -12,5 +12,9 @@ Cargo.lock.web
 .DS_Store
 .mcp.json
 
-# Local bar store and reports (backfill output). Regenerable; never source.
-data/
+# Local bar store and reports (backfill / morning output). Regenerable; never source —
+# except the checked-in sample report the frontend develops against.
+data/*
+!data/reports/
+data/reports/*
+!data/reports/sample.json

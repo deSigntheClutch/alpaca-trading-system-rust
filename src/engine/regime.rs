@@ -2,10 +2,8 @@
 //! top of the morning report, and later the gate on new longs (#61 phase 3). Faber
 //! (2007) style: it does not add return, it keeps you out of broad sell-offs.
 
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-
 use crate::domain::error::MarketError;
+pub use crate::domain::report::Regime;
 use crate::domain::types::{Symbol, Timeframe};
 use crate::traits::BarSource;
 
@@ -14,21 +12,6 @@ use crate::traits::BarSource;
 /// is the point of a regime line.
 pub const DEFAULT_SYMBOL: &str = "SPY";
 pub const DEFAULT_WINDOW: usize = 200;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "frontend/src/bindings/")]
-pub struct Regime {
-    #[ts(type = "string")]
-    pub symbol: Symbol,
-    /// Timestamp of the close used, epoch millis.
-    pub as_of: i64,
-    pub close: f64,
-    pub sma: f64,
-    pub window: usize,
-    pub above: bool,
-    /// `(close / sma − 1) × 100`; negative when below.
-    pub distance_pct: f64,
-}
 
 /// `None` when fewer than `window` bars exist — a new store, or a bad symbol — so the
 /// report shows "regime: unavailable" rather than a number computed on half a window.

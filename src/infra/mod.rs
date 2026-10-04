@@ -12,6 +12,7 @@
 //!     `store.rs`  — `Store`: `ScyllaStore`, `MemStore`
 //!     `llm.rs`    — `LlmClient`: `Claude`, `Bedrock`
 //!     `news.rs`   — `NewsSource`: `AlpacaNews`
+//!   - `report_store.rs` — `ReportStore`, one `MorningReport` JSON per day plus `latest.json`.
 //!   - `bar_store.rs` — `BarFileStore`, the JSONL files under `data/bars/` that the
 //!     backfill writes and `LocalBars` (#47) will read. Not a port impl; the storage
 //!     primitive both of those share.
@@ -25,6 +26,7 @@ pub mod clients;
 pub mod llm;
 pub mod market;
 pub mod news;
+pub mod report_store;
 pub mod store;
 
 pub use bar_store::{Appended, BarFileStore, Meta};
@@ -33,4 +35,5 @@ pub use clients::{AlpacaClient, AnthropicClient, BedrockClient, FinnhubClient};
 pub use llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
 pub use market::{AlpacaBars, CryptoWs, LocalBars};
 pub use news::AlpacaNews;
+pub use report_store::ReportStore;
 pub use store::{MemStore, ScyllaStore};
