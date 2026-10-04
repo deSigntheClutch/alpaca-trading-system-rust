@@ -12,7 +12,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::PathBuf;
 
-use crate::domain::types::{Bar, Symbol, Timeframe};
+use serde::{Deserialize, Serialize};
+
+use crate::domain::types::{AssetClass, Bar, Symbol, Timeframe};
 
 pub struct BarFileStore {
     root: PathBuf,
@@ -26,9 +28,27 @@ pub struct Appended {
     pub last_ts: Option<i64>,
 }
 
+/// Sidecar `<SYMBOL>.meta.json` next to the bars. `fetched_at` is when the file was
+/// last (re)built from the vendor, which is what the periodic full refresh keys on:
+/// a split rewrites every adjusted price in history, and nothing in the bars
+/// themselves says so. `first_ts`/`last_ts` save re-reading the file to know its span.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Meta {
+    /// Epoch millis of the last full write (first append after a reset).
+    pub fetched_at: i64,
+    /// `"all"` for stocks (splits and dividends folded in), `"none"` for crypto.
+    pub adjustment: String,
+    pub first_ts: i64,
+    pub last_ts: i64,
+}
+
 impl BarFileStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
     }
 
     /// `root/<timeframe>/<SYMBOL>.jsonl`. The slash in a crypto pair would be a
@@ -39,10 +59,44 @@ impl BarFileStore {
             .join(format!("{}.jsonl", file_stem(symbol)))
     }
 
+    fn meta_path(&self, symbol: &Symbol, timeframe: Timeframe) -> PathBuf {
+        self.root
+            .join(timeframe.as_str())
+            .join(format!("{}.meta.json", file_stem(symbol)))
+    }
+
+    /// The sidecar, `None` when there is none (pre-sidecar files included: treat as
+    /// "unknown age", which the refresh policy reads as "refresh").
+    pub fn meta(&self, symbol: &Symbol, timeframe: Timeframe) -> Option<Meta> {
+        let text = fs::read_to_string(self.meta_path(symbol, timeframe)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn write_meta(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        meta: &Meta,
+    ) -> std::io::Result<()> {
+        let path = self.meta_path(symbol, timeframe);
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::write(
+            path,
+            serde_json::to_vec_pretty(meta).map_err(std::io::Error::other)?,
+        )
+    }
+
     /// Timestamp of the newest stored bar, `None` when there is no file or it is
     /// empty. Reads the whole file: it is small, and the last line is all we need.
     pub fn last_ts(&self, symbol: &Symbol, timeframe: Timeframe) -> std::io::Result<Option<i64>> {
         Ok(self.read_all(symbol, timeframe)?.last().map(|b| b.ts))
+    }
+
+    /// Timestamp of the oldest stored bar.
+    pub fn first_ts(&self, symbol: &Symbol, timeframe: Timeframe) -> std::io::Result<Option<i64>> {
+        Ok(self.read_all(symbol, timeframe)?.first().map(|b| b.ts))
     }
 
     /// Every stored bar, chronological. A line that does not parse is skipped with a
@@ -94,6 +148,27 @@ impl BarFileStore {
             f.write_all(b"\n")?;
         }
         f.flush()?;
+
+        // Keep the sidecar current. A fresh file (no previous bars) starts the
+        // `fetched_at` clock; an incremental append only moves `last_ts`.
+        let now = now_ms();
+        let meta = match (last, self.meta(symbol, timeframe)) {
+            (Some(_), Some(mut m)) => {
+                m.last_ts = fresh.last().map(|b| b.ts).unwrap_or(m.last_ts);
+                m
+            }
+            _ => Meta {
+                fetched_at: now,
+                adjustment: match symbol.asset_class() {
+                    AssetClass::Stock => "all".into(),
+                    AssetClass::Crypto => "none".into(),
+                },
+                first_ts: fresh.first().map(|b| b.ts).unwrap_or(0),
+                last_ts: fresh.last().map(|b| b.ts).unwrap_or(0),
+            },
+        };
+        self.write_meta(symbol, timeframe, &meta)?;
+
         Ok(Appended {
             added: fresh.len(),
             first_ts: fresh.first().map(|b| b.ts),
@@ -104,12 +179,20 @@ impl BarFileStore {
     /// Delete the file so the next `append` rewrites from scratch — after a split,
     /// when `adjustment=all` has changed every historical price (#47 tracks when).
     pub fn reset(&self, symbol: &Symbol, timeframe: Timeframe) -> std::io::Result<()> {
-        match fs::remove_file(self.path(symbol, timeframe)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
+        for path in [
+            self.path(symbol, timeframe),
+            self.meta_path(symbol, timeframe),
+        ] {
+            match fs::remove_file(path) {
+                Ok(()) | Err(_) => {}
+            }
         }
+        Ok(())
     }
+}
+
+fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
 }
 
 fn file_stem(symbol: &Symbol) -> String {
@@ -215,8 +298,19 @@ mod tests {
             Appended::default()
         );
 
+        let m = s.meta(&sym, Timeframe::Day1).expect("sidecar written");
+        assert_eq!(
+            (m.first_ts, m.last_ts, m.adjustment.as_str()),
+            (1, 4, "all")
+        );
+        assert!(m.fetched_at > 0);
+
         s.reset(&sym, Timeframe::Day1).unwrap();
         assert!(s.read_all(&sym, Timeframe::Day1).unwrap().is_empty());
+        assert!(
+            s.meta(&sym, Timeframe::Day1).is_none(),
+            "reset drops the sidecar too"
+        );
         s.reset(&sym, Timeframe::Day1).unwrap(); // idempotent
         let _ = fs::remove_dir_all(&s.root);
     }

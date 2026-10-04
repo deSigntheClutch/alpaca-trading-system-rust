@@ -1,10 +1,14 @@
 //! `BarSource` / `MarketStream` adapters.
 //!   - `AlpacaBars` — historical bars (crypto and stocks) over a shared `AlpacaClient`.
+//!   - `LocalBars`  — a `BarSource` over the JSONL store with fall-through to an
+//!     upstream `BarSource` and write-through, so backtest and live read the same
+//!     files and Alpaca is asked only for what the files lack.
 //!   - `CryptoWs`   — the 24/7 crypto trade websocket. In-band auth (a message, not a
 //!     header): connect, send `auth`, wait for `authenticated`, send `subscribe`.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt};
@@ -17,6 +21,7 @@ use crate::domain::error::MarketError;
 use crate::domain::types::{AssetClass, Bar, Symbol, Tick, Timeframe};
 use crate::traits::{BarSource, MarketStream};
 
+use super::bar_store::BarFileStore;
 use super::clients::alpaca::{BarsResponse, Host, RawBar};
 use super::clients::{parse_rfc3339_millis, AlpacaClient};
 
@@ -204,6 +209,351 @@ mod lookback_tests {
         assert_eq!(lookback_days(AssetClass::Crypto, Timeframe::Hour1, 48), 7); // 2 days + 5
         assert!(lookback_days(AssetClass::Stock, Timeframe::Hour1, 70) >= 14); // 10 sessions
         assert_eq!(lookback_days(AssetClass::Stock, Timeframe::Week1, 10), 84);
+    }
+}
+
+// ---- LocalBars --------------------------------------------------------------------
+
+const MS_PER_DAY: i64 = 86_400_000;
+
+/// Clock injection so the freshness rules are testable at a fixed "now".
+type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+/// A `BarSource` that answers from `data/bars/` and goes upstream only for what the
+/// files lack: a cold symbol, bars newer than the last one stored, history older than
+/// the first one stored, or a periodic full refresh (a split rewrites every adjusted
+/// price, and nothing in the bars says so). Everything fetched is written through, so
+/// the second caller of the day pays nothing. Serves **completed** bars only: the
+/// upstream range is always capped at midnight UTC today.
+pub struct LocalBars<U> {
+    store: Arc<BarFileStore>,
+    upstream: U,
+    /// Rebuild a symbol's file from scratch once its sidecar is older than this.
+    full_refresh_after: Duration,
+    now: Clock,
+}
+
+impl<U: BarSource> LocalBars<U> {
+    /// Default full refresh every 7 days: a split is rare and a week of stale
+    /// adjustment is tolerable for a daily screener; `backfill --full` is the manual
+    /// override when it is not.
+    pub fn new(store: Arc<BarFileStore>, upstream: U) -> Self {
+        Self {
+            store,
+            upstream,
+            full_refresh_after: Duration::from_secs(7 * 86_400),
+            now: Arc::new(|| chrono::Utc::now().timestamp_millis()),
+        }
+    }
+
+    pub fn with_full_refresh_after(mut self, d: Duration) -> Self {
+        self.full_refresh_after = d;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_clock(mut self, now: Clock) -> Self {
+        self.now = now;
+        self
+    }
+
+    fn now_ms(&self) -> i64 {
+        (self.now)()
+    }
+
+    fn today_midnight(&self) -> i64 {
+        self.now_ms() - self.now_ms().rem_euclid(MS_PER_DAY)
+    }
+
+    /// Is the newest stored bar old enough that newer completed bars may exist?
+    /// Crypto prints a bar every day, so yesterday's must be there. Stocks skip
+    /// weekends and holidays: allow three calendar days before asking again, which
+    /// costs one wasted request after a long weekend and none on a normal one.
+    /// Weekly bars are stamped on their Monday and complete at Friday's close.
+    fn stale(&self, symbol: &Symbol, timeframe: Timeframe, last_ts: i64) -> bool {
+        let slack_days = match (symbol.asset_class(), timeframe) {
+            (_, Timeframe::Week1) => 8,
+            (AssetClass::Crypto, _) => 1,
+            (AssetClass::Stock, _) => 3,
+        };
+        last_ts < self.today_midnight() - slack_days * MS_PER_DAY
+    }
+
+    /// Does the file start late enough that a request for `need_start` is not served?
+    /// `need_start` can land on a weekend while the first bar is a Monday, so allow a
+    /// period's worth of slack before calling the history too short.
+    fn too_short(first_ts: i64, need_start: i64, timeframe: Timeframe) -> bool {
+        let slack = match timeframe {
+            Timeframe::Week1 => 14 * MS_PER_DAY,
+            _ => 7 * MS_PER_DAY,
+        };
+        first_ts > need_start + slack
+    }
+
+    /// Make the file cover `[need_start, today)` and be fresh, with at most one
+    /// upstream request, then return every stored bar.
+    async fn ensure(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        need_start: i64,
+    ) -> Result<Vec<Bar>, MarketError> {
+        let end = self.today_midnight();
+        let io = |e: std::io::Error| MarketError::Request(format!("bar store {symbol}: {e}"));
+
+        let stored = self.store.read_all(symbol, timeframe).map_err(io)?;
+        let span = stored.first().zip(stored.last()).map(|(a, b)| (a.ts, b.ts));
+        let refresh_due = match self.store.meta(symbol, timeframe) {
+            Some(m) => self.now_ms() - m.fetched_at > self.full_refresh_after.as_millis() as i64,
+            None => !stored.is_empty(), // bars without a sidecar: age unknown, rebuild
+        };
+
+        let fetch_from = match span {
+            None => Some(need_start),
+            Some((first, _)) if refresh_due || Self::too_short(first, need_start, timeframe) => {
+                tracing::info!(%symbol, ?timeframe, refresh_due, "rebuilding bar file");
+                self.store.reset(symbol, timeframe).map_err(io)?;
+                Some(need_start.min(first))
+            }
+            Some((_, last)) if self.stale(symbol, timeframe, last) => Some(last + 1),
+            Some(_) => None,
+        };
+
+        if let Some(from) = fetch_from {
+            if from < end {
+                let fetched = self
+                    .upstream
+                    .bars_range(symbol, timeframe, from, end)
+                    .await?;
+                self.store.append(symbol, timeframe, &fetched).map_err(io)?;
+            }
+            return self.store.read_all(symbol, timeframe).map_err(io);
+        }
+        Ok(stored)
+    }
+}
+
+#[async_trait]
+impl<U: BarSource> BarSource for LocalBars<U> {
+    /// The recent window from the file, after making sure the file reaches back far
+    /// enough and forward to the last completed bar.
+    async fn bars(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        limit: usize,
+    ) -> Result<Vec<Bar>, MarketError> {
+        let days = lookback_days(symbol.asset_class(), timeframe, limit) as i64;
+        let need_start = self.today_midnight() - days * MS_PER_DAY;
+        let mut all = self.ensure(symbol, timeframe, need_start).await?;
+        let skip = all.len().saturating_sub(limit);
+        Ok(all.split_off(skip))
+    }
+
+    /// `[start, end)` from the file; `end` is capped at midnight today because the
+    /// store never holds a bar that is still forming.
+    async fn bars_range(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<Bar>, MarketError> {
+        let end = end.min(self.today_midnight());
+        if start >= end {
+            return Ok(Vec::new());
+        }
+        let mut all = self.ensure(symbol, timeframe, start).await?;
+        all.retain(|b| b.ts >= start && b.ts < end);
+        Ok(all)
+    }
+}
+
+#[cfg(test)]
+mod local_bars_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex as StdMutex;
+
+    const DAY: i64 = MS_PER_DAY;
+    /// A fixed "now": 2026-10-07 (Wednesday) 10:00 UTC.
+    const NOW: i64 = 1_791_453_600_000 + 10 * 3_600_000;
+    const TODAY: i64 = NOW - NOW % DAY;
+
+    /// Upstream fake: one bar per calendar day in the asked range, every call logged.
+    #[derive(Default)]
+    struct Upstream {
+        calls: AtomicUsize,
+        ranges: StdMutex<Vec<(i64, i64)>>,
+    }
+
+    fn bar(symbol: &Symbol, ts: i64) -> Bar {
+        Bar {
+            symbol: symbol.clone(),
+            ts,
+            open: 1.0,
+            high: 1.0,
+            low: 1.0,
+            close: 1.0,
+            volume: 1.0,
+        }
+    }
+
+    #[async_trait]
+    impl BarSource for Upstream {
+        async fn bars(&self, _: &Symbol, _: Timeframe, _: usize) -> Result<Vec<Bar>, MarketError> {
+            unreachable!("LocalBars must only use bars_range upstream")
+        }
+        async fn bars_range(
+            &self,
+            symbol: &Symbol,
+            _: Timeframe,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<Bar>, MarketError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.ranges.lock().unwrap().push((start, end));
+            let first = start - start.rem_euclid(DAY) + if start % DAY == 0 { 0 } else { DAY };
+            Ok((0..)
+                .map(|i| first + i * DAY)
+                .take_while(|t| *t < end)
+                .map(|t| bar(symbol, t))
+                .collect())
+        }
+    }
+
+    fn fixture() -> (Arc<BarFileStore>, Arc<Upstream>) {
+        let dir = std::env::temp_dir().join(format!(
+            "local_bars_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        (
+            Arc::new(BarFileStore::new(dir)),
+            Arc::new(Upstream::default()),
+        )
+    }
+
+    fn local(store: &Arc<BarFileStore>, up: &Arc<Upstream>) -> LocalBars<Arc<Upstream>> {
+        LocalBars::new(store.clone(), up.clone()).with_clock(Arc::new(|| NOW))
+    }
+
+    #[tokio::test]
+    async fn cold_symbol_fetches_once_then_serves_from_disk() {
+        let (store, up) = fixture();
+        let lb = local(&store, &up);
+        let nvda = Symbol::from("NVDA");
+
+        let got = lb.bars(&nvda, Timeframe::Day1, 20).await.unwrap();
+        assert_eq!(got.len(), 20);
+        assert_eq!(
+            got.last().unwrap().ts,
+            TODAY - DAY,
+            "last completed bar is yesterday"
+        );
+        assert_eq!(up.calls.load(Ordering::SeqCst), 1);
+        let (s, e) = up.ranges.lock().unwrap()[0];
+        assert_eq!(e, TODAY, "upstream range is capped at midnight today");
+        assert!(
+            s <= TODAY - 20 * DAY,
+            "asked far enough back for 20 trading days"
+        );
+
+        let again = lb.bars(&nvda, Timeframe::Day1, 20).await.unwrap();
+        assert_eq!(again.len(), 20);
+        assert_eq!(
+            up.calls.load(Ordering::SeqCst),
+            1,
+            "warm read made no request"
+        );
+        let _ = std::fs::remove_dir_all(store.root());
+    }
+
+    #[tokio::test]
+    async fn stale_file_fetches_only_the_gap() {
+        let (store, up) = fixture();
+        let nvda = Symbol::from("NVDA");
+        // A file that ends ten days ago.
+        let old: Vec<Bar> = (10..=30)
+            .rev()
+            .map(|d| bar(&nvda, TODAY - d * DAY))
+            .collect();
+        store.append(&nvda, Timeframe::Day1, &old).unwrap();
+
+        let lb = local(&store, &up);
+        let got = lb.bars(&nvda, Timeframe::Day1, 5).await.unwrap();
+        assert_eq!(up.calls.load(Ordering::SeqCst), 1);
+        let (s, e) = up.ranges.lock().unwrap()[0];
+        assert_eq!(
+            s,
+            TODAY - 10 * DAY + 1,
+            "from just after the last stored bar"
+        );
+        assert_eq!(e, TODAY);
+        assert_eq!(got.last().unwrap().ts, TODAY - DAY);
+        let _ = std::fs::remove_dir_all(store.root());
+    }
+
+    #[tokio::test]
+    async fn fresh_stock_file_over_a_weekend_makes_no_request() {
+        let (store, up) = fixture();
+        let nvda = Symbol::from("NVDA");
+        // Last bar two days ago: a stock skipping a weekend is not stale.
+        let recent: Vec<Bar> = (2..=40)
+            .rev()
+            .map(|d| bar(&nvda, TODAY - d * DAY))
+            .collect();
+        store.append(&nvda, Timeframe::Day1, &recent).unwrap();
+        let lb = local(&store, &up);
+        let got = lb.bars(&nvda, Timeframe::Day1, 10).await.unwrap();
+        assert_eq!(got.len(), 10);
+        assert_eq!(up.calls.load(Ordering::SeqCst), 0);
+
+        // The same file for a crypto pair IS stale: it prints every day.
+        let btc = Symbol::from("BTC/USD");
+        let recent: Vec<Bar> = (2..=40).rev().map(|d| bar(&btc, TODAY - d * DAY)).collect();
+        store.append(&btc, Timeframe::Day1, &recent).unwrap();
+        lb.bars(&btc, Timeframe::Day1, 10).await.unwrap();
+        assert_eq!(up.calls.load(Ordering::SeqCst), 1);
+        let _ = std::fs::remove_dir_all(store.root());
+    }
+
+    #[tokio::test]
+    async fn short_history_is_rebuilt_from_the_needed_start() {
+        let (store, up) = fixture();
+        let nvda = Symbol::from("NVDA");
+        let short: Vec<Bar> = (1..=5).rev().map(|d| bar(&nvda, TODAY - d * DAY)).collect();
+        store.append(&nvda, Timeframe::Day1, &short).unwrap();
+        let lb = local(&store, &up);
+        let got = lb.bars(&nvda, Timeframe::Day1, 60).await.unwrap();
+        assert_eq!(up.calls.load(Ordering::SeqCst), 1);
+        let (s, _) = up.ranges.lock().unwrap()[0];
+        assert!(
+            s < TODAY - 60 * DAY,
+            "rebuilt from far enough back, not appended"
+        );
+        assert!(got.len() >= 60);
+        let _ = std::fs::remove_dir_all(store.root());
+    }
+
+    #[tokio::test]
+    async fn bars_range_caps_end_at_today_and_serves_the_slice() {
+        let (store, up) = fixture();
+        let lb = local(&store, &up);
+        let nvda = Symbol::from("NVDA");
+        let (start, end) = (TODAY - 30 * DAY, TODAY + 5 * DAY);
+        let got = lb
+            .bars_range(&nvda, Timeframe::Day1, start, end)
+            .await
+            .unwrap();
+        assert!(got.iter().all(|b| b.ts >= start && b.ts < TODAY));
+        assert_eq!(got.len(), 30);
+        let (_, e) = up.ranges.lock().unwrap()[0];
+        assert_eq!(e, TODAY);
+        let _ = std::fs::remove_dir_all(store.root());
     }
 }
 

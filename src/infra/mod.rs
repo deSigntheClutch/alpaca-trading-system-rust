@@ -7,7 +7,7 @@
 //!     `BedrockClient`.
 //!   - one file per port, named like its trait, holding every adapter for that port.
 //!     An adapter borrows a client (`Arc`) and translates wire types into domain types:
-//!     `market.rs` — `BarSource` / `MarketStream`: `AlpacaBars`, `CryptoWs`
+//!     `market.rs` — `BarSource` / `MarketStream`: `AlpacaBars`, `LocalBars`, `CryptoWs`
 //!     `broker.rs` — `Broker`: `AlpacaBroker`
 //!     `store.rs`  — `Store`: `ScyllaStore`, `MemStore`
 //!     `llm.rs`    — `LlmClient`: `Claude`, `Bedrock`
@@ -27,10 +27,10 @@ pub mod market;
 pub mod news;
 pub mod store;
 
-pub use bar_store::{Appended, BarFileStore};
+pub use bar_store::{Appended, BarFileStore, Meta};
 pub use broker::AlpacaBroker;
 pub use clients::{AlpacaClient, AnthropicClient, BedrockClient, FinnhubClient};
 pub use llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
-pub use market::{AlpacaBars, CryptoWs};
+pub use market::{AlpacaBars, CryptoWs, LocalBars};
 pub use news::AlpacaNews;
 pub use store::{MemStore, ScyllaStore};
