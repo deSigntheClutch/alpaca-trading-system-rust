@@ -1,9 +1,9 @@
-//! `morning` — the daily report. Today it assembles and writes the `MorningReport`
-//! (#67): regime line, screener picks, each pick's earnings date and last-24h
-//! headlines, sector and theme roll-ups. Commentary arrives with #66, the scorecard
-//! with #35, the step-by-step hardening with #68.
+//! `morning` — the daily report: regime line, screener picks, each pick's earnings
+//! date, recent headlines and an LLM note, sector and theme roll-ups (#67, #66). The
+//! scorecard arrives with #35, the step-by-step hardening with #68.
 //!
 //!     cargo run --release --bin morning                 # writes data/reports/<date>.json + latest.json
+//!     cargo run --release --bin morning -- --no-llm     # same report, commentary left empty, costs nothing
 //!     cargo run --release --bin morning -- --top 10 --json
 //!
 //! Reads bars through `LocalBars`, so run `backfill --universe config/universe.csv`
@@ -25,12 +25,15 @@ use alpaca_trading_system::domain::config::Config;
 use alpaca_trading_system::domain::report::{MorningReport, Pick, RunStats};
 use alpaca_trading_system::domain::types::{EarningsEvent, Headline, Symbol};
 use alpaca_trading_system::domain::universe::Universe;
+use alpaca_trading_system::engine::agents::commentator::{self, Commentator};
 use alpaca_trading_system::engine::regime;
 use alpaca_trading_system::engine::screener::{self, ScreenerConfig};
 use alpaca_trading_system::infra::{
-    AlpacaBars, AlpacaClient, AlpacaNews, BarFileStore, FinnhubClient, LocalBars, ReportStore,
+    llm, AlpacaBars, AlpacaClient, AlpacaNews, AnthropicClient, BarFileStore, Claude,
+    FinnhubClient, LocalBars, ReportStore,
 };
-use alpaca_trading_system::traits::{FundamentalSource, NewsSource};
+use alpaca_trading_system::traits::{FundamentalSource, LlmClient, NewsSource};
+use std::sync::atomic::Ordering;
 
 /// Headlines kept per pick, and the look-back. 72 hours, not 24: the report runs
 /// before the open, and on a Monday (or the day after a holiday) the last 24 hours
@@ -67,6 +70,19 @@ struct Args {
     /// Print the report as JSON to stdout as well.
     #[arg(long)]
     json: bool,
+
+    /// Skip the LLM notes. The report is complete otherwise and the run costs nothing.
+    #[arg(long)]
+    no_llm: bool,
+    /// Anthropic model for the notes.
+    #[arg(long, default_value = llm::SONNET)]
+    model: String,
+    /// LLM notes requested at once.
+    #[arg(long, default_value_t = 4)]
+    llm_concurrency: usize,
+    /// On-disk cache so a same-day rerun makes no LLM calls.
+    #[arg(long, default_value = "data/llm_cache")]
+    llm_cache: PathBuf,
 }
 
 #[tokio::main]
@@ -133,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
         Vec::new()
     });
 
-    let picks: Vec<Pick> = screen
+    let mut picks: Vec<Pick> = screen
         .picks
         .iter()
         .cloned()
@@ -155,6 +171,52 @@ async fn main() -> anyhow::Result<()> {
         })
         .collect();
 
+    // 3. One LLM note per pick. Soft: no key or a vendor outage leaves `commentary`
+    // empty and says so; the rest of the report is unaffected.
+    let mut llm_stats = RunStats::default();
+    if args.no_llm {
+        warnings.push("commentary skipped: --no-llm".into());
+    } else if cfg.anthropic_key.trim().is_empty() {
+        warnings.push("commentary skipped: ANTHROPIC_API_KEY missing".into());
+    } else {
+        let claude = Claude::new(
+            Arc::new(AnthropicClient::new(cfg.anthropic_key.clone())),
+            &args.model,
+        );
+        let agent = Commentator::new(&claude)
+            .with_cache(&args.llm_cache)
+            .with_concurrency(args.llm_concurrency);
+        let inputs: Vec<commentator::Input<'_>> = picks
+            .iter()
+            .map(|p| commentator::Input {
+                date,
+                scored: &p.scored,
+                earnings: p.earnings.as_ref(),
+                headlines: &p.headlines,
+                regime: regime.as_ref(),
+            })
+            .collect();
+        let notes = agent.comment_all(&inputs).await;
+        for (pick, note) in picks.iter_mut().zip(notes) {
+            pick.commentary = note;
+        }
+        let u = &agent.usage;
+        llm_stats.llm_calls = u.calls.load(Ordering::Relaxed) as u32;
+        llm_stats.llm_cached = u.cached.load(Ordering::Relaxed) as u32;
+        llm_stats.llm_input_tokens = u.input_tokens.load(Ordering::Relaxed);
+        llm_stats.llm_output_tokens = u.output_tokens.load(Ordering::Relaxed);
+        llm_stats.llm_cost_usd = llm::cost_usd(
+            claude.model_id(),
+            llm_stats.llm_input_tokens,
+            llm_stats.llm_output_tokens,
+        )
+        .unwrap_or(0.0);
+        let failed = u.failed.load(Ordering::Relaxed);
+        if failed > 0 {
+            warnings.push(format!("commentary missing for {failed} pick(s); see log"));
+        }
+    }
+
     let report = MorningReport {
         date,
         generated_at: Utc::now().timestamp_millis(),
@@ -168,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
         run: RunStats {
             elapsed_ms: t0.elapsed().as_millis() as u64,
             warnings,
-            ..Default::default()
+            ..llm_stats
         },
     };
 
@@ -259,6 +321,20 @@ fn print_summary(r: &MorningReport, path: &std::path::Path) {
                 .as_ref()
                 .map_or("-".to_string(), |e| e.date.to_string()),
             p.headlines.len(),
+        );
+        if let Some(c) = &p.commentary {
+            println!("        [{:?}] {}", c.watch_reason, c.summary);
+            println!("        risk: {}", c.risk);
+        }
+    }
+    if r.run.llm_calls + r.run.llm_cached > 0 {
+        println!(
+            "\nllm      {} calls · {} cached · {} in / {} out tokens · ${:.4}",
+            r.run.llm_calls,
+            r.run.llm_cached,
+            r.run.llm_input_tokens,
+            r.run.llm_output_tokens,
+            r.run.llm_cost_usd
         );
     }
     if !r.earnings_this_week.is_empty() {

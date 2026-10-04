@@ -54,15 +54,28 @@ impl AnthropicClient {
     }
 }
 
-/// `{ "content": [ { "type": "text", "text": "..." } ] }`. `stop_reason` and `usage`
-/// are on the wire too; the commentary agent (#66) adds them when it needs them.
+/// `{ "content": [ { "type": "text", "text": "..." } ], "stop_reason": "end_turn",
+///    "usage": { "input_tokens": n, "output_tokens": n } }`
 #[derive(Deserialize)]
 pub(crate) struct MessagesResponse {
+    #[serde(default)]
     pub(crate) content: Vec<ContentBlock>,
+    #[serde(default)]
+    pub(crate) stop_reason: Option<String>,
+    #[serde(default)]
+    pub(crate) usage: Usage,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct ContentBlock {
     #[serde(default)]
     pub(crate) text: Option<String>,
+}
+
+#[derive(Deserialize, Default, Clone, Copy)]
+pub(crate) struct Usage {
+    #[serde(default)]
+    pub(crate) input_tokens: u64,
+    #[serde(default)]
+    pub(crate) output_tokens: u64,
 }

@@ -15,7 +15,7 @@ pub mod store;
 
 pub use broker::Broker;
 pub use fundamentals::FundamentalSource;
-pub use llm::LlmClient;
+pub use llm::{LlmClient, LlmReply};
 pub use market::{BarSource, MarketStream};
 pub use news::NewsSource;
 pub use store::Store;
