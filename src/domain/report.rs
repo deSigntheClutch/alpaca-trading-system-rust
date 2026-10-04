@@ -137,6 +137,70 @@ pub struct RunStats {
     pub llm_cost_usd: f64,
 }
 
+/// One pick's realised outcome over a horizon: bought at the open of the first
+/// session on or after the report date, sold at the close of the `h`-th session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct PickOutcome {
+    #[ts(type = "string")]
+    pub symbol: Symbol,
+    pub entry_ts: i64,
+    pub entry: f64,
+    pub exit_ts: i64,
+    pub exit: f64,
+    /// `exit / entry − 1`.
+    pub ret: f64,
+    /// The benchmark over the same sessions.
+    pub benchmark_ret: f64,
+    /// `ret − benchmark_ret`: the only number that says whether the rule beat
+    /// buying the index instead.
+    pub excess: f64,
+}
+
+/// One report's picks scored at one horizon.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct ReportOutcome {
+    #[ts(type = "string")]
+    pub date: NaiveDate,
+    pub picks: Vec<PickOutcome>,
+    pub mean_return: f64,
+    pub mean_excess: f64,
+    /// Share of picks with positive excess.
+    pub hit_rate: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct HorizonStats {
+    pub horizon_days: usize,
+    pub reports: usize,
+    pub picks: usize,
+    pub mean_return: f64,
+    pub mean_benchmark_return: f64,
+    pub mean_excess: f64,
+    pub hit_rate: f64,
+    /// Oldest first, for the page's time series.
+    pub by_report: Vec<ReportOutcome>,
+}
+
+/// Did the rule work? Every past report's picks, scored against what happened next
+/// and against the benchmark over the same sessions, at each horizon. Only reports
+/// whose horizon has fully elapsed are counted, so the number never includes a
+/// position that is still open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct Scorecard {
+    #[ts(type = "string")]
+    pub as_of: NaiveDate,
+    #[ts(type = "string")]
+    pub benchmark: Symbol,
+    pub horizons: Vec<HorizonStats>,
+    /// The caveats that go with the number, written once here so the page can show
+    /// them next to it.
+    pub note: String,
+}
+
 /// The report. One file per day under `data/reports/`, plus `latest.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/bindings/")]
@@ -153,5 +217,8 @@ pub struct MorningReport {
     pub by_theme: Vec<Aggregate>,
     pub skipped: Vec<Skipped>,
     pub universe_size: usize,
+    /// Absent on replayed reports and until there is enough history to score.
+    #[serde(default)]
+    pub scorecard: Option<Scorecard>,
     pub run: RunStats,
 }
