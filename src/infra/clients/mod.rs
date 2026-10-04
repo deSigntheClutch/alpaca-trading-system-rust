@@ -2,11 +2,16 @@
 //! a single API and returns that API's wire types; the port adapters in `infra/*.rs`
 //! turn those into domain types. One client is shared (`Arc`) by every adapter built on
 //! the same vendor, so one HTTP pool and one credential per vendor.
+//!
+//! `http.rs` is the shared send-and-decode: status handling, 429 retry, timeouts and
+//! JSON decoding are written once there, and every client's `get_json` is a one-liner
+//! that adds its own auth and calls it.
 
 pub(crate) mod alpaca;
 pub(crate) mod anthropic;
 pub(crate) mod bedrock;
 pub(crate) mod finnhub;
+pub(crate) mod http;
 
 pub use alpaca::AlpacaClient;
 pub use anthropic::AnthropicClient;

@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
-use reqwest::StatusCode;
 use rust_decimal::prelude::FromPrimitive;
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
@@ -14,6 +13,8 @@ use serde::Deserialize;
 use crate::domain::error::FundamentalError;
 use crate::domain::types::{EarningsEvent, EarningsHour, Symbol};
 use crate::traits::FundamentalSource;
+
+use super::http::send_json;
 
 const BASE: &str = "https://finnhub.io/api/v1";
 
@@ -87,61 +88,19 @@ impl FinnhubClient {
         Ok(Self { http, key })
     }
 
-    /// One GET against Finnhub, decoded as `T`. Appends `token=` itself.
-    ///
-    /// 429 handling: Finnhub's free tier is 60 req/min. On the first 429 we wait
-    /// for `Retry-After` seconds (default 1 if the header is missing or garbled)
-    /// and retry exactly once; a second 429 surfaces as `RateLimited` so the
-    /// caller can decide, instead of this client spinning at 6am.
+    /// One GET against Finnhub, decoded as `T`. Appends `token=` itself; status
+    /// handling and the single 429 retry are the shared `send_json`.
     async fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
         params: &[(&str, String)],
     ) -> Result<T, FundamentalError> {
-        let url = format!("{BASE}{path}");
-        let mut retried = false;
-        loop {
-            let resp = self
-                .http
-                .get(&url)
-                .query(params)
-                .query(&[("token", self.key.as_str())])
-                .send()
-                .await
-                .map_err(|e| {
-                    if e.is_timeout() {
-                        FundamentalError::Timeout
-                    } else {
-                        FundamentalError::Request(e.to_string())
-                    }
-                })?;
-
-            let status = resp.status();
-            if status == StatusCode::TOO_MANY_REQUESTS {
-                if retried {
-                    return Err(FundamentalError::RateLimited);
-                }
-                let wait = resp
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    .unwrap_or(1);
-                tokio::time::sleep(Duration::from_secs(wait)).await;
-                retried = true;
-                continue;
-            }
-            if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(FundamentalError::Request(format!(
-                    "{path} {status}: {body}"
-                )));
-            }
-            return resp
-                .json::<T>()
-                .await
-                .map_err(|e| FundamentalError::Decode(e.to_string()));
-        }
+        let req = self
+            .http
+            .get(format!("{BASE}{path}"))
+            .query(params)
+            .query(&[("token", self.key.as_str())]);
+        Ok(send_json(path, req).await?)
     }
 }
 
