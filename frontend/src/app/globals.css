@@ -149,3 +149,31 @@ button.linkish {
   pointer-events: none; font-size: clamp(18px, 4vw, 40px); font-weight: 800; letter-spacing: 2px;
   color: rgba(180, 90, 30, 0.13); transform: rotate(-12deg); user-select: none; white-space: nowrap;
 }
+
+/* ── morning report ─────────────────────────────────────────────────────── */
+.table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e6e6e6; border-radius: 10px; overflow: hidden; }
+.table th, .table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #f2f2f2; font-variant-numeric: tabular-nums; vertical-align: top; }
+.table th { background: #f7f7f7; color: #555; font-size: 12px; font-weight: 600; }
+.table tbody tr:last-child td { border-bottom: none; }
+.table.picks tbody tr { cursor: pointer; }
+.table.picks tbody tr:hover { background: #fafbff; }
+.table tr.sel { background: #f4f6ff; }
+.num { text-align: right; }
+.pos { color: #1a7f37; }
+.neg { color: #a3251f; }
+.badge.buy { background: #e6f4ea; color: #1a7f37; border-color: #b7e1c1; }
+.badge.sell { background: #fff0f0; color: #a3251f; border-color: #f3c2c2; }
+.chip-row { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.drawer { background: #fff; border: 1px solid #e6e6e6; border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 4px 12px; font-size: 13px; margin-bottom: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 820px) { .two { grid-template-columns: 1fr; } }
+.note { background: #fbfbf6; border: 1px solid #efe9d0; border-radius: 8px; padding: 8px 12px; margin: 8px 0 12px; }
+.note p { margin: 6px 0; }
+.headlines { margin: 0; padding-left: 18px; }
+.headlines li { margin: 2px 0; }
+.seg-btn { border: 1px solid #d5d5d5; background: #fff; border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; color: #444; }
+.seg-btn:hover:not(:disabled) { background: #f4f6ff; }
+.seg-btn:disabled { opacity: 0.5; cursor: default; }
+.scroll { overflow-x: auto; }
+details > summary { cursor: pointer; margin: 8px 0 4px; }

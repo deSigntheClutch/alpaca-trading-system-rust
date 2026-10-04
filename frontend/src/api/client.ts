@@ -6,7 +6,7 @@
  * lands the switch is one environment variable and this file stops being
  * interesting:
  *
- *     VITE_USE_FIXTURES=false npm run dev
+ *     NEXT_PUBLIC_USE_FIXTURES=false npm run dev
  *
  * The real flow is asynchronous on purpose. The rule arm answers in
  * milliseconds, but an LLM arm runs for minutes, so a run is started, polled,
@@ -17,7 +17,9 @@
 import { fixtureRun } from './fixtures'
 import type { BacktestResult, RunRequest, RunStatus, RunSummary } from './types'
 
-const USE_FIXTURES = import.meta.env.VITE_USE_FIXTURES !== 'false'
+// `NEXT_PUBLIC_` is Next's rule for env vars that may reach the browser; it is
+// inlined at build time, so a static export bakes the choice in.
+const USE_FIXTURES = process.env.NEXT_PUBLIC_USE_FIXTURES !== 'false'
 
 /** Rough LLM call count for a request, mirroring the estimate BT-7 enforces. */
 export function estimateLlmCalls(req: RunRequest): number {

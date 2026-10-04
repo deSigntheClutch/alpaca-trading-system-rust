@@ -1,3 +1,5 @@
+'use client'
+
 /**
  * The backtest page.
  *
@@ -10,13 +12,18 @@
  * the selection.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Chart } from './Chart'
+import dynamic from 'next/dynamic'
 import { DecisionDetail } from './DecisionDetail'
 import { MetricCards } from './MetricCards'
 import { RunControls } from './RunControls'
 import { TradeTable } from './TradeTable'
 import { runBacktest, usingFixtures } from './api/client'
 import type { BacktestResult, RunRequest, RunStatus } from './api/types'
+
+// lightweight-charts draws on a <canvas> and only runs in a browser. `ssr: false`
+// keeps it out of the build-time pre-render, so the static export never tries
+// to run it in Node. Everything else on the page is plain React and pre-renders fine.
+const Chart = dynamic(() => import('./Chart').then((m) => m.Chart), { ssr: false })
 
 const DEFAULT_REQUEST: RunRequest = {
   symbols: ['NVDA'],
@@ -83,7 +90,7 @@ export function App() {
           request at all: the series is a random walk seeded from the letters of the ticker, indexed to
           100 at the start of the window. A real symbol will not show its real price, and the returns
           here mean nothing. This exists so the page can be built before the bar endpoints (#30, #52)
-          and the run API (#50) are written. Set <code>VITE_USE_FIXTURES=false</code> once those exist.
+          and the run API (#50) are written. Set <code>NEXT_PUBLIC_USE_FIXTURES=false</code> once those exist.
         </div>
       )}
 

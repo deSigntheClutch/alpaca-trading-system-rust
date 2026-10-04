@@ -32,8 +32,14 @@ const toSecs = (ts: number) => (ts / 1000) as UTCTimestamp
 
 export function Chart({ days, startingCash, onSelect, selectedTs, watermark }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Latest callback, read inside the chart's click handler, so re-creating the
+  // chart is not required just because the parent re-rendered with a new closure.
+  // Written in an effect, not during render: React 19's lint forbids ref writes
+  // in the render body.
   const onSelectRef = useRef(onSelect)
-  onSelectRef.current = onSelect
+  useEffect(() => {
+    onSelectRef.current = onSelect
+  }, [onSelect])
 
   useEffect(() => {
     const el = containerRef.current

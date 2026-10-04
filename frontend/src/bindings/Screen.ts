@@ -7,7 +7,7 @@ export type Screen = {
 /**
  * Newest bar timestamp across all scored names, epoch millis.
  */
-as_of: bigint, 
+as_of: number, 
 /**
  * Every scored name, ETFs included, best score first; ties broken by symbol.
  */
@@ -15,4 +15,4 @@ ranked: Array<Scored>,
 /**
  * Top `top_n` of `ranked` excluding ETFs: the buy candidates.
  */
-picks: Array<Scored>, by_sector: Array<Aggregate>, by_theme: Array<Aggregate>, skipped: Array<Skipped>, elapsed_ms: bigint, };
+picks: Array<Scored>, by_sector: Array<Aggregate>, by_theme: Array<Aggregate>, skipped: Array<Skipped>, elapsed_ms: number, };

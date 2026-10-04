@@ -14,7 +14,7 @@ export type MorningReport = {
 /**
  * Report date, UTC.
  */
-date: string, generated_at: bigint, regime: Regime | null, picks: Array<Pick>, 
+date: string, generated_at: number, regime: Regime | null, picks: Array<Pick>, 
 /**
  * Universe names reporting in the next seven days, soonest first.
  */

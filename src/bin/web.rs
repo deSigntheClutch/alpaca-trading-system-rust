@@ -2,8 +2,8 @@
 //! as JSON, and (in prod) the built SPA. It ONLY reads files — no broker, no orders,
 //! no writes — so looking at the dashboard can never move money.
 //!
-//! Dev:  `cargo run --bin web` here + `npm run dev` in frontend/ (Vite proxies /api).
-//! Prod: `npm run build` in frontend/, then this bin serves frontend/dist too.
+//! Dev:  `cargo run --bin web` here + `npm run dev` in frontend/ (Next.js proxies /api).
+//! Prod: `npm run build` in frontend/ (static export), then this bin serves frontend/out too.
 //!
 //! `GET /api/bars/{symbol}?timeframe=1Day&limit=500` serves the local bar store the
 //! backfill writes. A crypto pair goes in the path URL-encoded: `/api/bars/BTC%2FUSD`.
@@ -71,10 +71,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/reports", get(get_report_dates))
         .route("/api/reports/latest", get(get_report_latest))
         .route("/api/reports/{date}", get(get_report))
-        // Prod: same origin serves the built SPA. Missing dist/ (dev, or before a
+        // Prod: same origin serves the built SPA. Missing out/ (dev, or before a
         // build) just 404s the fallback — the API routes still work.
-        .fallback_service(ServeDir::new("frontend/dist"))
-        // Dev: Vite serves the SPA on another port and calls this API cross-origin.
+        .fallback_service(ServeDir::new("frontend/out"))
+        // Dev: Next.js serves the SPA on :3000 and proxies /api here; CORS stays
+        // permissive so a direct cross-origin call still works.
         .layer(CorsLayer::permissive())
         .with_state(paths);
 

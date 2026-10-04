@@ -4,4 +4,4 @@
  * How the run went. `warnings` is where a step that failed soft says so, so a report
  * with no earnings section is distinguishable from a week with no earnings.
  */
-export type RunStats = { elapsed_ms: bigint, warnings: Array<string>, llm_calls: number, llm_cached: number, llm_input_tokens: bigint, llm_output_tokens: bigint, llm_cost_usd: number, };
+export type RunStats = { elapsed_ms: number, warnings: Array<string>, llm_calls: number, llm_cached: number, llm_input_tokens: number, llm_output_tokens: number, llm_cost_usd: number, };
