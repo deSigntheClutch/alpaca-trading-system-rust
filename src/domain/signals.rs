@@ -7,7 +7,11 @@
 //!   2. Momentum : SMA5 vs SMA20 crossover direction (trend-following)
 //!   3. RSI(14)  : overbought/oversold, contrarian brake
 
-#[derive(Debug, PartialEq)]
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
 pub enum Rating {
     StrongBuy,
     Buy,
@@ -16,6 +20,7 @@ pub enum Rating {
     StrongSell,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub score: f64, // [-1, 1]: >0 bullish, <0 bearish
     pub rating: Rating,
