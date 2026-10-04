@@ -1,10 +1,11 @@
 //! `morning` — the daily report: regime line, screener picks, each pick's earnings
-//! date, recent headlines and an LLM note, sector and theme roll-ups (#67, #66). The
-//! scorecard arrives with #35, the step-by-step hardening with #68.
+//! date, recent headlines and an LLM note, sector and theme roll-ups, and the
+//! scorecard of every past report (#64, #61, #67, #66, #35, #79).
 //!
 //!     cargo run --release --bin morning                 # writes data/reports/<date>.json + latest.json
 //!     cargo run --release --bin morning -- --no-llm     # same report, commentary left empty, costs nothing
 //!     cargo run --release --bin morning -- --date 2026-06-02 --no-llm   # replay that morning from the bar files
+//!     cargo run --release --bin morning -- --replay-from 2026-07-01     # one report per session since then, then today's
 //!     cargo run --release --bin morning -- --top 10 --json
 //!
 //! `--date` is a true replay: the screen and the regime see only bars before that
@@ -12,13 +13,13 @@
 //! which is forward-only — is skipped with a warning for past dates. Replays use
 //! today's universe and today's adjusted prices (survivorship bias; see #79).
 //!
-//! Reads bars through `LocalBars`, so run `backfill --universe config/universe.csv`
-//! once first; after that a run is a second or two plus the earnings and news calls.
-//! Earnings and news fail soft: a missing key or a vendor error becomes a line in
-//! `run.warnings`, never a missing report.
+//! `--replay-from` writes one report per trading session from that date to
+//! yesterday (no LLM, no news: the scorecard needs picks, not prose), then today's
+//! report, whose scorecard now has months of history behind it on day one.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -28,18 +29,17 @@ use clap::Parser;
 use futures::future::join_all;
 
 use alpaca_trading_system::domain::config::Config;
-use alpaca_trading_system::domain::report::{MorningReport, Pick, RunStats};
-use alpaca_trading_system::domain::types::{EarningsEvent, Headline, Symbol};
+use alpaca_trading_system::domain::report::{MorningReport, Pick, RunStats, Scorecard};
+use alpaca_trading_system::domain::types::{EarningsEvent, Headline, Symbol, Timeframe};
 use alpaca_trading_system::domain::universe::Universe;
 use alpaca_trading_system::engine::agents::commentator::{self, Commentator};
-use alpaca_trading_system::engine::regime;
 use alpaca_trading_system::engine::screener::{self, ScreenerConfig};
+use alpaca_trading_system::engine::{regime, scorecard};
 use alpaca_trading_system::infra::{
     llm, AlpacaBars, AlpacaClient, AlpacaNews, AnthropicClient, BarFileStore, Claude,
     FinnhubClient, LocalBars, ReportStore,
 };
-use alpaca_trading_system::traits::{FundamentalSource, LlmClient, NewsSource};
-use std::sync::atomic::Ordering;
+use alpaca_trading_system::traits::{BarSource, FundamentalSource, LlmClient, NewsSource};
 
 /// Headlines kept per pick, and the look-back. 72 hours, not 24: the report runs
 /// before the open, and on a Monday (or the day after a holiday) the last 24 hours
@@ -63,13 +63,17 @@ struct Args {
     /// Bars per symbol handed to the signal.
     #[arg(long, default_value_t = 60)]
     window: usize,
-    /// Regime index.
+    /// Regime index and scorecard benchmark.
     #[arg(long, default_value = regime::DEFAULT_SYMBOL)]
     regime_symbol: String,
     /// The morning to produce the report for (UTC). Default today. A past date replays
     /// it from the bar files.
     #[arg(long)]
     date: Option<NaiveDate>,
+    /// Write one report per trading session from this date to yesterday (no LLM, no
+    /// news), then today's report with the scorecard over all of them.
+    #[arg(long)]
+    replay_from: Option<NaiveDate>,
     #[arg(long, default_value = "data/bars")]
     bars: PathBuf,
     #[arg(long, default_value = "data/reports")]
@@ -81,6 +85,12 @@ struct Args {
     /// Skip the LLM notes. The report is complete otherwise and the run costs nothing.
     #[arg(long)]
     no_llm: bool,
+    /// Skip the headlines.
+    #[arg(long)]
+    no_news: bool,
+    /// Skip the scorecard.
+    #[arg(long)]
+    no_scorecard: bool,
     /// Anthropic model for the notes.
     #[arg(long, default_value = llm::SONNET)]
     model: String,
@@ -90,6 +100,25 @@ struct Args {
     /// On-disk cache so a same-day rerun makes no LLM calls.
     #[arg(long, default_value = "data/llm_cache")]
     llm_cache: PathBuf,
+}
+
+/// Everything a report needs that does not change between dates.
+struct Ctx {
+    args: Args,
+    universe: Universe,
+    in_universe: HashSet<Symbol>,
+    alpaca: Arc<AlpacaClient>,
+    bars: Arc<LocalBars<AlpacaBars>>,
+    finnhub_key: String,
+    anthropic_key: String,
+    today: NaiveDate,
+}
+
+/// What to leave out of one report.
+#[derive(Clone, Copy)]
+struct Skip {
+    llm: bool,
+    news: bool,
 }
 
 #[tokio::main]
@@ -102,8 +131,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let t0 = Instant::now();
-    let mut warnings: Vec<String> = Vec::new();
 
     let universe = Universe::load(&args.universe)
         .with_context(|| format!("load universe {}", args.universe.display()))?;
@@ -118,17 +145,99 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(BarFileStore::new(args.bars.clone())),
         AlpacaBars::new(alpaca.clone()),
     ));
-    let today = Utc::now().date_naive();
-    let date = args.date.unwrap_or(today);
-    let replay = date < today;
+    let ctx = Ctx {
+        in_universe: universe.symbols().cloned().collect(),
+        universe,
+        alpaca,
+        bars,
+        finnhub_key: cfg.finnhub_key,
+        anthropic_key: cfg.anthropic_key,
+        today: Utc::now().date_naive(),
+        args,
+    };
+    let store = ReportStore::new(&ctx.args.out);
+
+    // Batch replay first: one report per session, picks only.
+    if let Some(from) = ctx.args.replay_from {
+        let sessions = trading_days(
+            &*ctx.bars,
+            &Symbol::from(ctx.args.regime_symbol.as_str()),
+            from,
+            ctx.today,
+        )
+        .await?;
+        println!(
+            "replay   {} sessions {} .. {} (no LLM, no news)",
+            sessions.len(),
+            from,
+            ctx.today
+        );
+        let t0 = Instant::now();
+        for day in &sessions {
+            let r = build_report(
+                &ctx,
+                *day,
+                Skip {
+                    llm: true,
+                    news: true,
+                },
+            )
+            .await;
+            store.write(&r)?;
+            println!(
+                "  {}  {:<60} {} skipped",
+                r.date,
+                r.picks
+                    .iter()
+                    .map(|p| p.scored.symbol.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                r.skipped.len()
+            );
+        }
+        println!("replay   done in {:.1}s\n", t0.elapsed().as_secs_f64());
+    }
+
+    // The report asked for (today unless --date), with the scorecard over the past.
+    let date = ctx.args.date.unwrap_or(ctx.today);
+    let mut report = build_report(
+        &ctx,
+        date,
+        Skip {
+            llm: ctx.args.no_llm,
+            news: ctx.args.no_news,
+        },
+    )
+    .await;
+    if !ctx.args.no_scorecard {
+        let past = load_reports(&store, date);
+        if past.is_empty() {
+            report
+                .run
+                .warnings
+                .push("scorecard: no earlier reports to score".into());
+        } else {
+            let bench = Symbol::from(ctx.args.regime_symbol.as_str());
+            report.scorecard = Some(scorecard::scorecard(&*ctx.bars, &past, &bench, date).await);
+        }
+    }
+    let path = store.write(&report)?;
+    print_summary(&report, &path);
+    if ctx.args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+    Ok(())
+}
+
+/// One report for the morning of `date`, from bars strictly before it.
+async fn build_report(ctx: &Ctx, date: NaiveDate, skip: Skip) -> MorningReport {
+    let t0 = Instant::now();
+    let mut warnings: Vec<String> = Vec::new();
+    let replay = date < ctx.today;
     // Exclusive end: bars strictly before this morning. For today that is "through
     // yesterday's close", the same rule LocalBars applies; for a past date it is the
     // replay boundary.
-    let as_of = date
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight")
-        .and_utc()
-        .timestamp_millis();
+    let as_of = midnight_ms(date);
     if replay {
         warnings.push(format!(
             "replay of {date}: today's universe and adjusted prices (survivorship bias); earnings skipped"
@@ -136,62 +245,71 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 1. Regime and screen share nothing: run them together.
-    let regime_symbol = Symbol::from(args.regime_symbol.as_str());
+    let regime_symbol = Symbol::from(ctx.args.regime_symbol.as_str());
     let screener_cfg = ScreenerConfig {
-        top_n: args.top,
-        bar_window: args.window,
+        top_n: ctx.args.top,
+        bar_window: ctx.args.window,
         as_of: Some(as_of),
         ..Default::default()
     };
     let (regime, screen) = tokio::join!(
-        regime::regime(&*bars, &regime_symbol, regime::DEFAULT_WINDOW, Some(as_of)),
-        screener::screen(bars.clone(), &universe, &screener_cfg),
+        regime::regime(
+            &*ctx.bars,
+            &regime_symbol,
+            regime::DEFAULT_WINDOW,
+            Some(as_of)
+        ),
+        screener::screen(ctx.bars.clone(), &ctx.universe, &screener_cfg),
     );
-    let regime = match regime {
-        Ok(r) => r,
-        Err(e) => {
-            warnings.push(format!("regime unavailable: {e}"));
-            None
-        }
-    };
+    let regime = regime.unwrap_or_else(|e| {
+        warnings.push(format!("regime unavailable: {e}"));
+        None
+    });
 
     // 2. Earnings for the whole universe and headlines for the picks, together. Both
     // windows hang off `as_of`, so a replay reads the news of that morning.
-    let in_universe: HashSet<Symbol> = universe.symbols().cloned().collect();
-    let news = AlpacaNews::new(alpaca.clone());
+    let news = AlpacaNews::new(ctx.alpaca.clone());
     let since = as_of - NEWS_LOOKBACK_HOURS * 3_600_000;
     let (earnings, headlines) = tokio::join!(
         async {
             if replay {
                 Ok(Vec::new())
             } else {
-                earnings_this_week(cfg.finnhub_key.clone(), date, &in_universe).await
+                earnings_this_week(ctx.finnhub_key.clone(), date, &ctx.in_universe).await
             }
         },
-        join_all(screen.picks.iter().map(|p| news.headlines_between(
-            std::slice::from_ref(&p.symbol),
-            since,
-            as_of,
-            25
-        ))),
+        async {
+            if skip.news {
+                Vec::new()
+            } else {
+                join_all(screen.picks.iter().map(|p| {
+                    news.headlines_between(std::slice::from_ref(&p.symbol), since, as_of, 25)
+                }))
+                .await
+            }
+        },
     );
     let earnings = earnings.unwrap_or_else(|w| {
         warnings.push(w);
         Vec::new()
     });
+    if skip.news {
+        warnings.push("news skipped".into());
+    }
 
+    let mut heads_iter = headlines.into_iter();
     let mut picks: Vec<Pick> = screen
         .picks
         .iter()
         .cloned()
-        .zip(headlines)
-        .map(|(scored, heads)| {
-            let heads = match heads {
-                Ok(h) => select_headlines(h),
-                Err(e) => {
+        .map(|scored| {
+            let heads = match heads_iter.next() {
+                Some(Ok(h)) => select_headlines(h),
+                Some(Err(e)) => {
                     warnings.push(format!("news for {}: {e}", scored.symbol));
                     Vec::new()
                 }
+                None => Vec::new(),
             };
             Pick {
                 earnings: earnings.iter().find(|e| e.symbol == scored.symbol).cloned(),
@@ -205,18 +323,18 @@ async fn main() -> anyhow::Result<()> {
     // 3. One LLM note per pick. Soft: no key or a vendor outage leaves `commentary`
     // empty and says so; the rest of the report is unaffected.
     let mut llm_stats = RunStats::default();
-    if args.no_llm {
-        warnings.push("commentary skipped: --no-llm".into());
-    } else if cfg.anthropic_key.trim().is_empty() {
+    if skip.llm {
+        warnings.push("commentary skipped".into());
+    } else if ctx.anthropic_key.trim().is_empty() {
         warnings.push("commentary skipped: ANTHROPIC_API_KEY missing".into());
     } else {
         let claude = Claude::new(
-            Arc::new(AnthropicClient::new(cfg.anthropic_key.clone())),
-            &args.model,
+            Arc::new(AnthropicClient::new(ctx.anthropic_key.clone())),
+            &ctx.args.model,
         );
         let agent = Commentator::new(&claude)
-            .with_cache(&args.llm_cache)
-            .with_concurrency(args.llm_concurrency);
+            .with_cache(&ctx.args.llm_cache)
+            .with_concurrency(ctx.args.llm_concurrency);
         let inputs: Vec<commentator::Input<'_>> = picks
             .iter()
             .map(|p| commentator::Input {
@@ -248,7 +366,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let report = MorningReport {
+    MorningReport {
         date,
         generated_at: Utc::now().timestamp_millis(),
         regime,
@@ -257,20 +375,48 @@ async fn main() -> anyhow::Result<()> {
         by_sector: screen.by_sector,
         by_theme: screen.by_theme,
         skipped: screen.skipped,
-        universe_size: universe.len(),
+        universe_size: ctx.universe.len(),
+        scorecard: None,
         run: RunStats {
             elapsed_ms: t0.elapsed().as_millis() as u64,
             warnings,
             ..llm_stats
         },
-    };
-
-    let path = ReportStore::new(&args.out).write(&report)?;
-    print_summary(&report, &path);
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
     }
-    Ok(())
+}
+
+/// Trading sessions in `[from, to)`: the benchmark's bar dates, since the index trades
+/// every session and nothing else. A report for session `d` sees bars before `d`.
+async fn trading_days<B: BarSource>(
+    bars: &B,
+    benchmark: &Symbol,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> anyhow::Result<Vec<NaiveDate>> {
+    let series = bars
+        .bars_range(
+            benchmark,
+            Timeframe::Day1,
+            midnight_ms(from),
+            midnight_ms(to),
+        )
+        .await
+        .with_context(|| format!("sessions from {benchmark}"))?;
+    Ok(series
+        .iter()
+        .filter_map(|b| chrono::DateTime::from_timestamp_millis(b.ts).map(|t| t.date_naive()))
+        .collect())
+}
+
+/// Every stored report dated before `date`.
+fn load_reports(store: &ReportStore, date: NaiveDate) -> Vec<MorningReport> {
+    store
+        .dates()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| *d < date)
+        .filter_map(|d| store.read(d).ok().flatten())
+        .collect()
 }
 
 /// Universe names reporting in `[date, date + 7)`, soonest first. `Err` carries the
@@ -310,6 +456,13 @@ fn select_headlines(mut heads: Vec<Headline>) -> Vec<Headline> {
     heads
 }
 
+fn midnight_ms(d: NaiveDate) -> i64 {
+    d.and_hms_opt(0, 0, 0)
+        .expect("midnight")
+        .and_utc()
+        .timestamp_millis()
+}
+
 fn print_summary(r: &MorningReport, path: &std::path::Path) {
     match &r.regime {
         Some(g) => println!(
@@ -331,6 +484,9 @@ fn print_summary(r: &MorningReport, path: &std::path::Path) {
         r.earnings_this_week.len(),
         r.run.elapsed_ms
     );
+    if let Some(sc) = &r.scorecard {
+        print_scorecard(sc);
+    }
     println!();
     println!(
         "{:<7} {:<22} {:<10} {:>6} {:<9} {:>8} {:>6} {:>6}  {:<10} news",
@@ -383,6 +539,36 @@ fn print_summary(r: &MorningReport, path: &std::path::Path) {
         println!("warning  {w}");
     }
     println!("\nwrote {}", path.display());
+}
+
+fn print_scorecard(sc: &Scorecard) {
+    let span = sc
+        .horizons
+        .iter()
+        .flat_map(|h| h.by_report.iter().map(|r| r.date))
+        .fold(None::<(NaiveDate, NaiveDate)>, |acc, d| match acc {
+            None => Some((d, d)),
+            Some((a, b)) => Some((a.min(d), b.max(d))),
+        });
+    match span {
+        Some((a, b)) => println!("scorecard vs {}  reports {a} .. {b}", sc.benchmark.as_str()),
+        None => println!(
+            "scorecard vs {}  (no completed horizons yet)",
+            sc.benchmark.as_str()
+        ),
+    }
+    for h in &sc.horizons {
+        println!(
+            "  {:>3}d  reports {:>3}  picks {:>4}  mean {:>+6.2}%  bench {:>+6.2}%  excess {:>+6.2}%  hit {:>4.0}%",
+            h.horizon_days,
+            h.reports,
+            h.picks,
+            h.mean_return * 100.0,
+            h.mean_benchmark_return * 100.0,
+            h.mean_excess * 100.0,
+            h.hit_rate * 100.0
+        );
+    }
 }
 
 fn trunc(s: &str, n: usize) -> String {
