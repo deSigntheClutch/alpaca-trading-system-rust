@@ -17,7 +17,7 @@
 //! yesterday (no LLM, no news: the scorecard needs picks, not prose), then today's
 //! report, whose scorecard now has months of history behind it on day one.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -29,9 +29,11 @@ use clap::Parser;
 use futures::future::join_all;
 
 use alpaca_trading_system::domain::config::Config;
-use alpaca_trading_system::domain::report::{MorningReport, Pick, RunStats, Scorecard};
+use alpaca_trading_system::domain::report::{
+    MorningReport, Pick, RunStats, Scorecard, Scored, WatchItem,
+};
 use alpaca_trading_system::domain::types::{EarningsEvent, Headline, Symbol, Timeframe};
-use alpaca_trading_system::domain::universe::Universe;
+use alpaca_trading_system::domain::universe::{Instrument, Universe};
 use alpaca_trading_system::engine::agents::commentator::{self, Commentator};
 use alpaca_trading_system::engine::screener::{self, ScreenerConfig};
 use alpaca_trading_system::engine::{regime, scorecard};
@@ -266,8 +268,28 @@ async fn build_report(ctx: &Ctx, date: NaiveDate, skip: Skip) -> MorningReport {
         None
     });
 
-    // 2. Earnings for the whole universe and headlines for the picks, together. Both
-    // windows hang off `as_of`, so a replay reads the news of that morning.
+    // Who gets headlines and a note: the rule's picks plus the owner's watchlist,
+    // each name once. The watchlist is read from the day's full ranking so it also
+    // carries where the rule put the name.
+    let ranked_pos: HashMap<Symbol, usize> = screen
+        .ranked
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.symbol.clone(), i))
+        .collect();
+    let watch_insts: Vec<&Instrument> = ctx.universe.watchlist().collect();
+    let mut covered: Vec<Scored> = screen.picks.clone();
+    for inst in &watch_insts {
+        if let Some(&i) = ranked_pos.get(&inst.symbol) {
+            if !covered.iter().any(|s| s.symbol == inst.symbol) {
+                covered.push(screen.ranked[i].clone());
+            }
+        }
+    }
+
+    // 2. Earnings for the whole universe and headlines for every covered name,
+    // together. Both windows hang off `as_of`, so a replay reads the news of that
+    // morning.
     let news = AlpacaNews::new(ctx.alpaca.clone());
     let since = as_of - NEWS_LOOKBACK_HOURS * 3_600_000;
     let (earnings, headlines) = tokio::join!(
@@ -282,8 +304,8 @@ async fn build_report(ctx: &Ctx, date: NaiveDate, skip: Skip) -> MorningReport {
             if skip.news {
                 Vec::new()
             } else {
-                join_all(screen.picks.iter().map(|p| {
-                    news.headlines_between(std::slice::from_ref(&p.symbol), since, as_of, 25)
+                join_all(covered.iter().map(|s| {
+                    news.headlines_between(std::slice::from_ref(&s.symbol), since, as_of, 25)
                 }))
                 .await
             }
@@ -298,30 +320,30 @@ async fn build_report(ctx: &Ctx, date: NaiveDate, skip: Skip) -> MorningReport {
     }
 
     let mut heads_iter = headlines.into_iter();
-    let mut picks: Vec<Pick> = screen
-        .picks
-        .iter()
-        .cloned()
-        .map(|scored| {
-            let heads = match heads_iter.next() {
-                Some(Ok(h)) => select_headlines(h),
-                Some(Err(e)) => {
-                    warnings.push(format!("news for {}: {e}", scored.symbol));
-                    Vec::new()
-                }
-                None => Vec::new(),
-            };
+    let mut by_symbol: HashMap<Symbol, Pick> = HashMap::new();
+    let order: Vec<Symbol> = covered.iter().map(|s| s.symbol.clone()).collect();
+    for scored in covered {
+        let heads = match heads_iter.next() {
+            Some(Ok(h)) => select_headlines(h),
+            Some(Err(e)) => {
+                warnings.push(format!("news for {}: {e}", scored.symbol));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        by_symbol.insert(
+            scored.symbol.clone(),
             Pick {
                 earnings: earnings.iter().find(|e| e.symbol == scored.symbol).cloned(),
                 headlines: heads,
                 commentary: None,
                 scored,
-            }
-        })
-        .collect();
+            },
+        );
+    }
 
-    // 3. One LLM note per pick. Soft: no key or a vendor outage leaves `commentary`
-    // empty and says so; the rest of the report is unaffected.
+    // 3. One LLM note per covered name. Soft: no key or a vendor outage leaves
+    // `commentary` empty and says so; the rest of the report is unaffected.
     let mut llm_stats = RunStats::default();
     if skip.llm {
         warnings.push("commentary skipped".into());
@@ -335,19 +357,24 @@ async fn build_report(ctx: &Ctx, date: NaiveDate, skip: Skip) -> MorningReport {
         let agent = Commentator::new(&claude)
             .with_cache(&ctx.args.llm_cache)
             .with_concurrency(ctx.args.llm_concurrency);
-        let inputs: Vec<commentator::Input<'_>> = picks
-            .iter()
-            .map(|p| commentator::Input {
-                date,
-                scored: &p.scored,
-                earnings: p.earnings.as_ref(),
-                headlines: &p.headlines,
-                regime: regime.as_ref(),
-            })
-            .collect();
-        let notes = agent.comment_all(&inputs).await;
-        for (pick, note) in picks.iter_mut().zip(notes) {
-            pick.commentary = note;
+        let notes = {
+            let inputs: Vec<commentator::Input<'_>> = order
+                .iter()
+                .map(|sym| &by_symbol[sym])
+                .map(|p| commentator::Input {
+                    date,
+                    scored: &p.scored,
+                    earnings: p.earnings.as_ref(),
+                    headlines: &p.headlines,
+                    regime: regime.as_ref(),
+                })
+                .collect();
+            agent.comment_all(&inputs).await
+        };
+        for (sym, note) in order.iter().zip(notes) {
+            if let Some(p) = by_symbol.get_mut(sym) {
+                p.commentary = note;
+            }
         }
         let u = &agent.usage;
         llm_stats.llm_calls = u.calls.load(Ordering::Relaxed) as u32;
@@ -362,15 +389,50 @@ async fn build_report(ctx: &Ctx, date: NaiveDate, skip: Skip) -> MorningReport {
         .unwrap_or(0.0);
         let failed = u.failed.load(Ordering::Relaxed);
         if failed > 0 {
-            warnings.push(format!("commentary missing for {failed} pick(s); see log"));
+            warnings.push(format!("commentary missing for {failed} name(s); see log"));
         }
     }
+
+    let picks: Vec<Pick> = screen
+        .picks
+        .iter()
+        .filter_map(|s| by_symbol.get(&s.symbol).cloned())
+        .collect();
+    let watchlist: Vec<WatchItem> = watch_insts
+        .iter()
+        .map(|inst| match ranked_pos.get(&inst.symbol) {
+            Some(&i) => WatchItem {
+                symbol: inst.symbol.clone(),
+                name: inst.name.clone(),
+                rank: Some(i + 1),
+                of: screen.ranked.len(),
+                pick: by_symbol.get(&inst.symbol).cloned(),
+                unscored: None,
+            },
+            None => WatchItem {
+                symbol: inst.symbol.clone(),
+                name: inst.name.clone(),
+                rank: None,
+                of: screen.ranked.len(),
+                pick: None,
+                unscored: Some(
+                    screen
+                        .skipped
+                        .iter()
+                        .find(|k| k.symbol == inst.symbol)
+                        .map(|k| k.reason.clone())
+                        .unwrap_or_else(|| "not in the ranking".into()),
+                ),
+            },
+        })
+        .collect();
 
     MorningReport {
         date,
         generated_at: Utc::now().timestamp_millis(),
         regime,
         picks,
+        watchlist,
         earnings_this_week: earnings,
         by_sector: screen.by_sector,
         by_theme: screen.by_theme,
@@ -512,6 +574,39 @@ fn print_summary(r: &MorningReport, path: &std::path::Path) {
         if let Some(c) = &p.commentary {
             println!("        [{:?}] {}", c.watch_reason, c.summary);
             println!("        risk: {}", c.risk);
+        }
+    }
+    if !r.watchlist.is_empty() {
+        println!(
+            "\nwatchlist (rank of {})",
+            r.watchlist.first().map_or(0, |w| w.of)
+        );
+        for w in &r.watchlist {
+            match (&w.pick, w.rank) {
+                (Some(p), Some(rank)) => {
+                    let s = &p.scored;
+                    println!(
+                        "  #{:<4} {:<7} {:<22} {:>6.2} {:<9} {:>8.2} {:>5.1}% {:>5.1}%  news {}",
+                        rank,
+                        s.symbol.as_str(),
+                        trunc(&s.name, 22),
+                        s.score,
+                        format!("{:?}", s.rating),
+                        s.close,
+                        s.change_5d.map_or(0.0, |c| c * 100.0),
+                        s.change_20d.map_or(0.0, |c| c * 100.0),
+                        p.headlines.len()
+                    );
+                    if let Some(c) = &p.commentary {
+                        println!("        [{:?}] {}", c.watch_reason, c.summary);
+                    }
+                }
+                _ => println!(
+                    "  -     {:<7} {}",
+                    w.symbol.as_str(),
+                    w.unscored.as_deref().unwrap_or("unscored")
+                ),
+            }
         }
     }
     if r.run.llm_calls + r.run.llm_cached > 0 {

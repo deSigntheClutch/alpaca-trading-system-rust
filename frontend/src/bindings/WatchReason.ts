@@ -4,4 +4,4 @@
  * Why a name made the list, as one chip on the page. Chosen by the commentary agent
  * (#66) from this closed set; `Mixed` when no single reason dominates.
  */
-export type WatchReason = "momentum" | "breakout" | "oversold" | "earnings" | "news" | "mixed";
+export type WatchReason = "momentum" | "breakout" | "overbought" | "oversold" | "earnings" | "news" | "mixed";

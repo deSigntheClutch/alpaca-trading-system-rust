@@ -95,6 +95,9 @@ pub struct Screen {
 pub enum WatchReason {
     Momentum,
     Breakout,
+    /// Stretched to the upside (RSI high); the first run labelled an RSI-83 name
+    /// "oversold" because this value did not exist.
+    Overbought,
     Oversold,
     Earnings,
     News,
@@ -126,6 +129,24 @@ pub struct Pick {
     pub headlines: Vec<Headline>,
     /// `None` until the commentary agent runs, or when it declined to answer.
     pub commentary: Option<Commentary>,
+}
+
+/// A watched name: covered every morning regardless of the rule, shown with where
+/// the rule ranked it that day so "NVDA #37 of 161" reads at a glance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct WatchItem {
+    #[ts(type = "string")]
+    pub symbol: Symbol,
+    pub name: String,
+    /// 1-based position in the day's full ranking; `None` when the name was not scored.
+    pub rank: Option<usize>,
+    /// How many names were ranked that day.
+    pub of: usize,
+    /// Score, headlines and note — `None` when the name could not be scored.
+    pub pick: Option<Pick>,
+    /// Why it has no score (no bars on this feed, too short), when `pick` is `None`.
+    pub unscored: Option<String>,
 }
 
 /// How the run went. `warnings` is where a step that failed soft says so, so a report
@@ -222,6 +243,10 @@ pub struct MorningReport {
     pub generated_at: i64,
     pub regime: Option<Regime>,
     pub picks: Vec<Pick>,
+    /// The owner's always-covered names (`watch` in the universe file), with ranks.
+    /// Not part of the scorecard, which measures the rule's picks only.
+    #[serde(default)]
+    pub watchlist: Vec<WatchItem>,
     /// Universe names reporting in the next seven days, soonest first.
     pub earnings_this_week: Vec<EarningsEvent>,
     pub by_sector: Vec<Aggregate>,

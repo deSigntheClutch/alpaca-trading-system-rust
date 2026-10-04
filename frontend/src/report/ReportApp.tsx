@@ -17,6 +17,7 @@ import { PickDetail } from './PickDetail'
 import { PicksTable } from './PicksTable'
 import { RegimeBanner } from './RegimeBanner'
 import { ScorecardPanel } from './ScorecardPanel'
+import { WatchlistTable } from './WatchlistTable'
 
 type View =
   | { kind: 'report'; report: MorningReport }
@@ -87,7 +88,11 @@ export function ReportApp() {
     view?.kind === 'report' ? view.report.picks : view?.kind === 'replay' ? view.reply.screen.picks.map(asPick) : []
   const regime = view?.kind === 'report' ? view.report.regime : view?.kind === 'replay' ? view.reply.regime : null
   const screenLike = view?.kind === 'report' ? view.report : view?.kind === 'replay' ? view.reply.screen : null
-  const current = picks.find((p) => p.scored.symbol === selected) ?? null
+  const watchlist = view?.kind === 'report' ? view.report.watchlist : []
+  const current =
+    picks.find((p) => p.scored.symbol === selected) ??
+    watchlist.find((w) => w.symbol === selected)?.pick ??
+    null
 
   return (
     <div className="pad">
@@ -171,8 +176,15 @@ export function ReportApp() {
           <Section n={4} title="Picks" sub="今天的候选 · 规则选出的前 8 只,ETF 不算 · 点一行看详情" />
           <PicksTable picks={picks} selected={selected} onSelect={setSelected} />
 
+          {view.kind === 'report' && (
+            <>
+              <Section n={5} title="Watchlist" sub="你一直看的名字 · 不管规则选不选都有新闻和解读 · rank 是今天在全部排名里的位置" />
+              <WatchlistTable items={watchlist} selected={selected} onSelect={setSelected} />
+            </>
+          )}
+
           {current && (
-            <Section n={5} title="Detail" sub={`详情 · ${current.scored.symbol} 的指标、AI 解读、新闻、价格图`} />
+            <Section n={6} title="Detail" sub={`详情 · ${current.scored.symbol} 的指标、AI 解读、新闻、价格图`} />
           )}
           {current && (
             <PickDetail
@@ -184,13 +196,13 @@ export function ReportApp() {
 
           {screenLike && (
             <>
-              <Section n={6} title="By sector / theme" sub="分组平均分 · n 是组里有几只,n=1 就是那一只自己的分" />
+              <Section n={7} title="By sector / theme" sub="分组平均分 · n 是组里有几只,n=1 就是那一只自己的分" />
               <Aggregates bySector={screenLike.by_sector} byTheme={screenLike.by_theme} />
             </>
           )}
 
           {view.kind === 'report' && (
-            <Section n={7} title="Run" sub="这次运行 · 耗时、LLM 花费、警告、没打分的名字" />
+            <Section n={8} title="Run" sub="这次运行 · 耗时、LLM 花费、警告、没打分的名字" />
           )}
           {view.kind === 'report' && (
             <footer className="hint">

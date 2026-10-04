@@ -97,6 +97,7 @@ mod tests {
             generated_at: 1,
             regime: None,
             picks: Vec::new(),
+            watchlist: Vec::new(),
             earnings_this_week: Vec::new(),
             by_sector: Vec::new(),
             by_theme: Vec::new(),
