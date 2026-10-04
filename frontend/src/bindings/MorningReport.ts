@@ -4,6 +4,7 @@ import type { EarningsEvent } from "./EarningsEvent";
 import type { Pick } from "./Pick";
 import type { Regime } from "./Regime";
 import type { RunStats } from "./RunStats";
+import type { Scorecard } from "./Scorecard";
 import type { Skipped } from "./Skipped";
 
 /**
@@ -17,4 +18,8 @@ date: string, generated_at: bigint, regime: Regime | null, picks: Array<Pick>,
 /**
  * Universe names reporting in the next seven days, soonest first.
  */
-earnings_this_week: Array<EarningsEvent>, by_sector: Array<Aggregate>, by_theme: Array<Aggregate>, skipped: Array<Skipped>, universe_size: number, run: RunStats, };
+earnings_this_week: Array<EarningsEvent>, by_sector: Array<Aggregate>, by_theme: Array<Aggregate>, skipped: Array<Skipped>, universe_size: number, 
+/**
+ * Absent on replayed reports and until there is enough history to score.
+ */
+scorecard: Scorecard | null, run: RunStats, };

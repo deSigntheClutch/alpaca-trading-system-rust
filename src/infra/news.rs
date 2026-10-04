@@ -33,28 +33,37 @@ impl AlpacaNews {
 impl NewsSource for AlpacaNews {
     /// One request per page of up to 50, following `next_page_token` until `limit`
     /// headlines are in hand or the vendor runs out. Vendor sort is newest-first and
-    /// we re-sort locally anyway, so page order never matters.
-    async fn headlines(
+    /// we re-sort locally anyway, so page order never matters. `until` is sent as the
+    /// vendor's `end` when it is a real instant, and enforced locally regardless.
+    async fn headlines_between(
         &self,
         symbols: &[Symbol],
         since: i64,
+        until: i64,
         limit: usize,
     ) -> Result<Vec<Headline>, NewsError> {
-        if symbols.is_empty() || limit == 0 {
+        if symbols.is_empty() || limit == 0 || since >= until {
             return Ok(Vec::new());
         }
         let joined = symbols.iter().join(",");
-        let start = chrono::DateTime::from_timestamp_millis(since)
-            .ok_or_else(|| NewsError::Request(format!("since out of range: {since}")))?
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let to_rfc3339 = |ms: i64| {
+            chrono::DateTime::from_timestamp_millis(ms)
+                .ok_or_else(|| NewsError::Request(format!("timestamp out of range: {ms}")))
+                .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        };
+        let start = to_rfc3339(since)?;
+        let end = (until != i64::MAX).then(|| to_rfc3339(until)).transpose()?;
         let page_limit = limit.min(MAX_PAGE).to_string();
-        let params: Vec<(&str, &str)> = vec![
+        let mut params: Vec<(&str, &str)> = vec![
             ("symbols", joined.as_str()),
             ("start", start.as_str()),
             ("limit", page_limit.as_str()),
             ("sort", "desc"),
             ("include_content", "false"),
         ];
+        if let Some(end) = &end {
+            params.push(("end", end.as_str()));
+        }
 
         let mut out: Vec<Headline> = Vec::with_capacity(limit);
         let mut page_token: Option<String> = None;
@@ -80,15 +89,15 @@ impl NewsSource for AlpacaNews {
             }
         }
 
-        finish(&mut out, since, limit);
+        finish(&mut out, since, until, limit);
         Ok(out)
     }
 }
 
-/// Newest first, nothing older than `since`, at most `limit`. Shared by the vendor
+/// Newest first, inside `[since, until)`, at most `limit`. Shared by the vendor
 /// adapter and the in-memory fake so both answer the port's contract identically.
-fn finish(out: &mut Vec<Headline>, since: i64, limit: usize) {
-    out.retain(|h| h.ts >= since);
+fn finish(out: &mut Vec<Headline>, since: i64, until: i64, limit: usize) {
+    out.retain(|h| h.ts >= since && h.ts < until);
     out.sort_by(|a, b| b.ts.cmp(&a.ts).then(a.id.cmp(&b.id)));
     out.dedup_by_key(|h| h.id);
     out.truncate(limit);
@@ -135,10 +144,11 @@ pub struct MemNews {
 #[cfg(test)]
 #[async_trait]
 impl NewsSource for MemNews {
-    async fn headlines(
+    async fn headlines_between(
         &self,
         symbols: &[Symbol],
         since: i64,
+        until: i64,
         limit: usize,
     ) -> Result<Vec<Headline>, NewsError> {
         let mut out: Vec<Headline> = self
@@ -147,7 +157,7 @@ impl NewsSource for MemNews {
             .filter(|h| h.symbols.iter().any(|s| symbols.contains(s)))
             .cloned()
             .collect();
-        finish(&mut out, since, limit);
+        finish(&mut out, since, until, limit);
         Ok(out)
     }
 }
@@ -247,8 +257,13 @@ mod tests {
             symbols: vec![Symbol::from("A")],
         };
         let mut v = vec![h(1, 100), h(2, 300), h(2, 300), h(3, 50), h(4, 200)];
-        finish(&mut v, 100, 2);
+        finish(&mut v, 100, i64::MAX, 2);
         assert_eq!(v.iter().map(|x| x.id).collect::<Vec<_>>(), vec![2, 4]);
+
+        // `until` is exclusive: a replay for the morning of ts=300 must not see 300.
+        let mut v = vec![h(1, 100), h(2, 300), h(4, 200)];
+        finish(&mut v, 0, 300, 10);
+        assert_eq!(v.iter().map(|x| x.id).collect::<Vec<_>>(), vec![4, 1]);
     }
 
     #[tokio::test]

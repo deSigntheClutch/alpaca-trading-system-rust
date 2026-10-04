@@ -102,6 +102,7 @@ mod tests {
             by_theme: Vec::new(),
             skipped: Vec::new(),
             universe_size: n,
+            scorecard: None,
             run: RunStats::default(),
         }
     }

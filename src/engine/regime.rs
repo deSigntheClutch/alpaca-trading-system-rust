@@ -15,13 +15,17 @@ pub const DEFAULT_WINDOW: usize = 200;
 
 /// `None` when fewer than `window` bars exist — a new store, or a bad symbol — so the
 /// report shows "regime: unavailable" rather than a number computed on half a window.
+/// `as_of` (exclusive, epoch millis) replays the read as of a past morning.
 pub async fn regime<B: BarSource>(
     bars: &B,
     symbol: &Symbol,
     window: usize,
+    as_of: Option<i64>,
 ) -> Result<Option<Regime>, MarketError> {
     // A few extra so a short window of holidays does not drop us under `window`.
-    let series = bars.bars(symbol, Timeframe::Day1, window + 10).await?;
+    let series =
+        crate::engine::screener::window_bars(bars, symbol, Timeframe::Day1, window + 10, as_of)
+            .await?;
     Ok(compute(
         symbol,
         &series.iter().map(|b| (b.ts, b.close)).collect::<Vec<_>>(),

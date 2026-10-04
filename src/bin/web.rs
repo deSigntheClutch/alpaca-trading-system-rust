@@ -7,6 +7,11 @@
 //!
 //! `GET /api/bars/{symbol}?timeframe=1Day&limit=500` serves the local bar store the
 //! backfill writes. A crypto pair goes in the path URL-encoded: `/api/bars/BTC%2FUSD`.
+//!
+//! `GET /api/screen?date=2026-06-02&top=8&window=60` runs the screener and the regime
+//! read **as of that morning** against the bar files — the replay behind the page's
+//! date box. `GET /api/reports`, `/api/reports/latest`, `/api/reports/{date}` serve
+//! the written reports. Everything here reads files; nothing fetches.
 
 use std::net::SocketAddr;
 
@@ -17,9 +22,18 @@ use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use std::sync::Arc;
+
 use alpaca_trading_system::domain::dto::{BacktestResult, EventRow};
+use alpaca_trading_system::domain::report::{MorningReport, Regime, Screen};
 use alpaca_trading_system::domain::types::{Bar, Symbol, Timeframe};
-use alpaca_trading_system::infra::BarFileStore;
+use alpaca_trading_system::domain::universe::Universe;
+use alpaca_trading_system::engine::regime;
+use alpaca_trading_system::engine::screener::{self, ScreenerConfig};
+use alpaca_trading_system::infra::{BarFileStore, FileBars, ReportStore};
+use axum::http::StatusCode;
+use chrono::NaiveDate;
+use serde::Serialize;
 
 /// Where the two JSON-lines inputs live. v1 reads files the trading runs produce;
 /// swapping to a Scylla read later means changing only these handlers.
@@ -28,6 +42,8 @@ struct Paths {
     backtest: String,
     events: String,
     bars: String,
+    reports: String,
+    universe: String,
 }
 
 #[tokio::main]
@@ -43,12 +59,18 @@ async fn main() -> anyhow::Result<()> {
         backtest: std::env::var("BACKTEST_PATH").unwrap_or_else(|_| "backtest.jsonl".into()),
         events: std::env::var("EVENTS_PATH").unwrap_or_else(|_| "events.jsonl".into()),
         bars: std::env::var("BAR_STORE").unwrap_or_else(|_| "data/bars".into()),
+        reports: std::env::var("REPORT_STORE").unwrap_or_else(|_| "data/reports".into()),
+        universe: std::env::var("UNIVERSE").unwrap_or_else(|_| "config/universe.csv".into()),
     };
 
     let app = Router::new()
         .route("/api/backtest", get(get_backtest))
         .route("/api/events", get(get_events))
         .route("/api/bars/{symbol}", get(get_bars))
+        .route("/api/screen", get(get_screen))
+        .route("/api/reports", get(get_report_dates))
+        .route("/api/reports/latest", get(get_report_latest))
+        .route("/api/reports/{date}", get(get_report))
         // Prod: same origin serves the built SPA. Missing dist/ (dev, or before a
         // build) just 404s the fallback — the API routes still work.
         .fallback_service(ServeDir::new("frontend/dist"))
@@ -132,4 +154,78 @@ fn read_jsonl<T: DeserializeOwned>(path: &str) -> Vec<T> {
             }
         })
         .collect()
+}
+
+#[derive(Deserialize)]
+struct ScreenQuery {
+    /// The morning to replay, YYYY-MM-DD; default today. Only bars before this date
+    /// are visible, exactly as a live run that morning would have seen.
+    date: Option<NaiveDate>,
+    top: Option<usize>,
+    window: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct ScreenReply {
+    date: NaiveDate,
+    regime: Option<Regime>,
+    screen: Screen,
+}
+
+/// Replay the screener as of `date` against the bar files. No network: a name with no
+/// file is simply skipped, and the response says so in `screen.skipped`.
+async fn get_screen(
+    State(p): State<Paths>,
+    Query(q): Query<ScreenQuery>,
+) -> Result<Json<ScreenReply>, (StatusCode, String)> {
+    let universe = Universe::load(&p.universe)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("universe: {e}")))?;
+    let date = q.date.unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let as_of = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight")
+        .and_utc()
+        .timestamp_millis();
+    let bars = Arc::new(FileBars::new(Arc::new(BarFileStore::new(&p.bars))));
+    let cfg = ScreenerConfig {
+        top_n: q.top.unwrap_or(8),
+        bar_window: q.window.unwrap_or(60),
+        as_of: Some(as_of),
+        ..Default::default()
+    };
+    let spy = Symbol::from(regime::DEFAULT_SYMBOL);
+    let (regime, screen) = tokio::join!(
+        regime::regime(&*bars, &spy, regime::DEFAULT_WINDOW, Some(as_of)),
+        screener::screen(bars.clone(), &universe, &cfg),
+    );
+    Ok(Json(ScreenReply {
+        date,
+        regime: regime.unwrap_or_default(),
+        screen,
+    }))
+}
+
+async fn get_report_dates(State(p): State<Paths>) -> Json<Vec<NaiveDate>> {
+    Json(ReportStore::new(&p.reports).dates().unwrap_or_default())
+}
+
+async fn get_report_latest(State(p): State<Paths>) -> Result<Json<MorningReport>, StatusCode> {
+    ReportStore::new(&p.reports)
+        .latest()
+        .ok()
+        .flatten()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn get_report(
+    State(p): State<Paths>,
+    Path(date): Path<NaiveDate>,
+) -> Result<Json<MorningReport>, StatusCode> {
+    ReportStore::new(&p.reports)
+        .read(date)
+        .ok()
+        .flatten()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }

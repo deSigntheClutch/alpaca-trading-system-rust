@@ -3,6 +3,9 @@
 //!   - `LocalBars`  — a `BarSource` over the JSONL store with fall-through to an
 //!     upstream `BarSource` and write-through, so backtest and live read the same
 //!     files and Alpaca is asked only for what the files lack.
+//!   - `FileBars`   — the same store with no upstream at all: what is on disk is the
+//!     answer. For the read-only web API and for replays, where a network call
+//!     would be a bug.
 //!   - `CryptoWs`   — the 24/7 crypto trade websocket. In-band auth (a message, not a
 //!     header): connect, send `auth`, wait for `authenticated`, send `subscribe`.
 
@@ -554,6 +557,53 @@ mod local_bars_tests {
         let (_, e) = up.ranges.lock().unwrap()[0];
         assert_eq!(e, TODAY);
         let _ = std::fs::remove_dir_all(store.root());
+    }
+}
+
+// ---- FileBars ---------------------------------------------------------------------
+
+/// Read-only `BarSource` over the JSONL store. Never fetches: a symbol with no file is
+/// an empty series. Used where a network call would be wrong — the read-only web API,
+/// and replays of past dates, which by definition need no new data.
+pub struct FileBars {
+    store: Arc<BarFileStore>,
+}
+
+impl FileBars {
+    pub fn new(store: Arc<BarFileStore>) -> Self {
+        Self { store }
+    }
+
+    fn read(&self, symbol: &Symbol, timeframe: Timeframe) -> Result<Vec<Bar>, MarketError> {
+        self.store
+            .read_all(symbol, timeframe)
+            .map_err(|e| MarketError::Request(format!("bar store {symbol}: {e}")))
+    }
+}
+
+#[async_trait]
+impl BarSource for FileBars {
+    async fn bars(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        limit: usize,
+    ) -> Result<Vec<Bar>, MarketError> {
+        let mut all = self.read(symbol, timeframe)?;
+        let skip = all.len().saturating_sub(limit);
+        Ok(all.split_off(skip))
+    }
+
+    async fn bars_range(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<Bar>, MarketError> {
+        let mut all = self.read(symbol, timeframe)?;
+        all.retain(|b| b.ts >= start && b.ts < end);
+        Ok(all)
     }
 }
 

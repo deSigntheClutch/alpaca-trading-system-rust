@@ -17,6 +17,7 @@ use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
+use crate::domain::error::MarketError;
 pub use crate::domain::report::{Aggregate, Scored, Screen, Skipped};
 use crate::domain::signals;
 use crate::domain::types::{Symbol, Timeframe};
@@ -35,6 +36,9 @@ pub struct ScreenerConfig {
     pub timeframe: Timeframe,
     /// Symbols read at the same time.
     pub concurrency: usize,
+    /// Replay: score as of this instant (exclusive, epoch millis) — only bars before
+    /// it are visible. `None` means "now", i.e. the most recent completed bars.
+    pub as_of: Option<i64>,
 }
 
 impl Default for ScreenerConfig {
@@ -44,6 +48,32 @@ impl Default for ScreenerConfig {
             bar_window: 60,
             timeframe: Timeframe::Day1,
             concurrency: 8,
+            as_of: None,
+        }
+    }
+}
+
+const MS_PER_DAY: i64 = 86_400_000;
+
+/// The window of bars the signal sees. Live: the most recent `window`. Replay: the
+/// last `window` bars strictly before `as_of`, fetched over a generous span (twice
+/// the window in calendar days, so weekends and holidays never starve it).
+pub async fn window_bars<B: BarSource>(
+    bars: &B,
+    symbol: &Symbol,
+    timeframe: Timeframe,
+    window: usize,
+    as_of: Option<i64>,
+) -> Result<Vec<crate::domain::types::Bar>, MarketError> {
+    match as_of {
+        None => bars.bars(symbol, timeframe, window).await,
+        Some(end) => {
+            let span_days = (window as i64) * 2 + 10;
+            let mut v = bars
+                .bars_range(symbol, timeframe, end - span_days * MS_PER_DAY, end)
+                .await?;
+            let skip = v.len().saturating_sub(window);
+            Ok(v.split_off(skip))
         }
     }
 }
@@ -59,11 +89,10 @@ where
 
     for inst in universe.iter().cloned() {
         let (bars, gate) = (bars.clone(), gate.clone());
-        let (tf, window) = (cfg.timeframe, cfg.bar_window);
+        let (tf, window, as_of) = (cfg.timeframe, cfg.bar_window, cfg.as_of);
         set.spawn(async move {
             let _permit = gate.acquire().await.expect("semaphore open");
-            let series = bars
-                .bars(&inst.symbol, tf, window)
+            let series = window_bars(&*bars, &inst.symbol, tf, window, as_of)
                 .await
                 .map_err(|e| Skipped {
                     symbol: inst.symbol.clone(),
@@ -282,6 +311,55 @@ mod tests {
         assert_eq!(ai.count, 2, "UP and FLAT carry ai; NEW was skipped");
         assert_eq!(s.as_of, 59 * 86_400_000);
         assert_eq!(s.ranked[0].bars, 60);
+    }
+
+    #[tokio::test]
+    async fn as_of_replay_sees_nothing_at_or_after_the_date() {
+        // Fake's bars_range returns 60 bars at ts = 0..59 days regardless of range, so
+        // the filter inside LocalBars is not what is under test here; the screener's
+        // own window selection is. Use a fake that honours the range.
+        struct Ranged;
+        #[async_trait]
+        impl BarSource for Ranged {
+            async fn bars(
+                &self,
+                symbol: &Symbol,
+                _: Timeframe,
+                limit: usize,
+            ) -> Result<Vec<Bar>, MarketError> {
+                Ok(series(symbol, limit))
+            }
+            async fn bars_range(
+                &self,
+                symbol: &Symbol,
+                _: Timeframe,
+                start: i64,
+                end: i64,
+            ) -> Result<Vec<Bar>, MarketError> {
+                Ok(series(symbol, 400)
+                    .into_iter()
+                    .filter(|b| b.ts >= start && b.ts < end)
+                    .collect())
+            }
+        }
+        let as_of = 100 * 86_400_000; // day 100, exclusive
+        let cfg = ScreenerConfig {
+            top_n: 2,
+            bar_window: 30,
+            as_of: Some(as_of),
+            ..Default::default()
+        };
+        let s = screen(Arc::new(Ranged), &universe(), &cfg).await;
+        assert!(
+            s.ranked.iter().all(|x| x.as_of < as_of),
+            "no bar at or after as_of"
+        );
+        assert!(
+            s.ranked.iter().all(|x| x.as_of == 99 * 86_400_000),
+            "last visible bar is the day before"
+        );
+        assert!(s.ranked.iter().all(|x| x.bars == 30));
+        assert_eq!(s.as_of, 99 * 86_400_000);
     }
 
     #[test]
