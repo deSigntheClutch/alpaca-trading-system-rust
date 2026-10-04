@@ -35,6 +35,7 @@ ts-rs = { version = "10", features = ["serde-json-impl"] }
 itertools = "0.15.0"
 # config/universe.csv (domain/universe.rs)
 csv = "1"
+clap = { version = "4.6.7", features = ["derive"] }
 
 [dev-dependencies]
 rust_decimal_macros = "1.40.0"

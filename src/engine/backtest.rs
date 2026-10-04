@@ -90,6 +90,22 @@ impl BarSource for SimMarket {
         let start = (cursor + 1).saturating_sub(limit);
         Ok(self.bars[start..=cursor].to_vec())
     }
+
+    /// Same no-lookahead rule as `bars`: the range is clipped at the cursor.
+    async fn bars_range(
+        &self,
+        _symbol: &Symbol,
+        _timeframe: Timeframe,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<Bar>, MarketError> {
+        let cursor = self.cursor();
+        Ok(self.bars[..=cursor]
+            .iter()
+            .filter(|b| b.ts >= start && b.ts < end)
+            .cloned()
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -378,13 +394,13 @@ mod tests {
         let bars = rising_bars(40);
         let sim = SimMarket::new(bars.clone(), 10_000.0);
         sim.set_cursor(25);
-        let got = sim
-            .daily_bars(&Symbol::from("BTC/USD"), 60)
-            .await
-            .unwrap();
+        let got = sim.daily_bars(&Symbol::from("BTC/USD"), 60).await.unwrap();
         // The window ends exactly at "today" and contains nothing after it.
         assert_eq!(got.last().unwrap().ts, bars[25].ts);
-        assert!(got.iter().all(|b| b.ts <= bars[25].ts), "no future bars leaked");
+        assert!(
+            got.iter().all(|b| b.ts <= bars[25].ts),
+            "no future bars leaked"
+        );
         assert!(got.len() <= 26);
     }
 
@@ -404,10 +420,17 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.days.len(), 10, "10 decision days over the last 10 bars");
+        assert_eq!(
+            result.days.len(),
+            10,
+            "10 decision days over the last 10 bars"
+        );
         assert!(result.total_return.is_finite());
         assert!(result.max_drawdown.is_finite() && result.max_drawdown >= 0.0);
-        assert!(result.num_trades >= 1, "FakeLlm always buys → trades happen");
+        assert!(
+            result.num_trades >= 1,
+            "FakeLlm always buys → trades happen"
+        );
         // Every recorded day used a real bar (no fabricated prices) and carried the
         // captured signal + analyst text the frontend needs.
         assert!(result
