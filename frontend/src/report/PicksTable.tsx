@@ -23,7 +23,8 @@ export function PicksTable({
           <tr>
             <th>sym</th>
             <th>name</th>
-            <th>sector · themes</th>
+            <th>sector</th>
+            <th>themes</th>
             <th className="num">score</th>
             <th>rating</th>
             <th className="num">close</th>
@@ -52,14 +53,15 @@ export function PicksTable({
                   <code>{s.symbol}</code>
                 </td>
                 <td>{s.name}</td>
+                <td>{s.sector}</td>
                 <td>
                   <span className="chip-row">
-                    <span className="chip">{s.sector}</span>
                     {s.themes.slice(0, 3).map((t) => (
                       <span key={t} className="tag">
                         {t}
                       </span>
                     ))}
+                    {s.themes.length > 3 && <span className="dim">+{s.themes.length - 3}</span>}
                   </span>
                 </td>
                 <td className="num">{s.score.toFixed(2)}</td>
