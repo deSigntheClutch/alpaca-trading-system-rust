@@ -4,7 +4,13 @@
 //!
 //!     cargo run --release --bin morning                 # writes data/reports/<date>.json + latest.json
 //!     cargo run --release --bin morning -- --no-llm     # same report, commentary left empty, costs nothing
+//!     cargo run --release --bin morning -- --date 2026-06-02 --no-llm   # replay that morning from the bar files
 //!     cargo run --release --bin morning -- --top 10 --json
+//!
+//! `--date` is a true replay: the screen and the regime see only bars before that
+//! day, headlines come from the three days before it, and the earnings calendar —
+//! which is forward-only — is skipped with a warning for past dates. Replays use
+//! today's universe and today's adjusted prices (survivorship bias; see #79).
 //!
 //! Reads bars through `LocalBars`, so run `backfill --universe config/universe.csv`
 //! once first; after that a run is a second or two plus the earnings and news calls.
@@ -60,7 +66,8 @@ struct Args {
     /// Regime index.
     #[arg(long, default_value = regime::DEFAULT_SYMBOL)]
     regime_symbol: String,
-    /// Report date (UTC). Default today.
+    /// The morning to produce the report for (UTC). Default today. A past date replays
+    /// it from the bar files.
     #[arg(long)]
     date: Option<NaiveDate>,
     #[arg(long, default_value = "data/bars")]
@@ -111,17 +118,33 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(BarFileStore::new(args.bars.clone())),
         AlpacaBars::new(alpaca.clone()),
     ));
-    let date = args.date.unwrap_or_else(|| Utc::now().date_naive());
+    let today = Utc::now().date_naive();
+    let date = args.date.unwrap_or(today);
+    let replay = date < today;
+    // Exclusive end: bars strictly before this morning. For today that is "through
+    // yesterday's close", the same rule LocalBars applies; for a past date it is the
+    // replay boundary.
+    let as_of = date
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight")
+        .and_utc()
+        .timestamp_millis();
+    if replay {
+        warnings.push(format!(
+            "replay of {date}: today's universe and adjusted prices (survivorship bias); earnings skipped"
+        ));
+    }
 
     // 1. Regime and screen share nothing: run them together.
     let regime_symbol = Symbol::from(args.regime_symbol.as_str());
     let screener_cfg = ScreenerConfig {
         top_n: args.top,
         bar_window: args.window,
+        as_of: Some(as_of),
         ..Default::default()
     };
     let (regime, screen) = tokio::join!(
-        regime::regime(&*bars, &regime_symbol, regime::DEFAULT_WINDOW),
+        regime::regime(&*bars, &regime_symbol, regime::DEFAULT_WINDOW, Some(as_of)),
         screener::screen(bars.clone(), &universe, &screener_cfg),
     );
     let regime = match regime {
@@ -132,15 +155,23 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // 2. Earnings for the whole universe and headlines for the picks, together.
+    // 2. Earnings for the whole universe and headlines for the picks, together. Both
+    // windows hang off `as_of`, so a replay reads the news of that morning.
     let in_universe: HashSet<Symbol> = universe.symbols().cloned().collect();
     let news = AlpacaNews::new(alpaca.clone());
-    let since = Utc::now().timestamp_millis() - NEWS_LOOKBACK_HOURS * 3_600_000;
+    let since = as_of - NEWS_LOOKBACK_HOURS * 3_600_000;
     let (earnings, headlines) = tokio::join!(
-        earnings_this_week(cfg.finnhub_key.clone(), date, &in_universe),
-        join_all(screen.picks.iter().map(|p| news.headlines(
+        async {
+            if replay {
+                Ok(Vec::new())
+            } else {
+                earnings_this_week(cfg.finnhub_key.clone(), date, &in_universe).await
+            }
+        },
+        join_all(screen.picks.iter().map(|p| news.headlines_between(
             std::slice::from_ref(&p.symbol),
             since,
+            as_of,
             25
         ))),
     );
