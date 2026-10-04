@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::domain::error::StoreError;
 use crate::domain::types::{Bar, Event, Symbol};
+use async_trait::async_trait;
 
 /// Append-only event log + market-data store. impl #1 = ScyllaDB (+ local-file
 /// fallback); QuestDB analytics is the upgrade path.

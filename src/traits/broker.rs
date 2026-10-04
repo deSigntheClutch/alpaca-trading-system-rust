@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use rust_decimal::Decimal;
 use crate::domain::error::BrokerError;
 use crate::domain::types::{Order, OrderRequest, Position};
+use async_trait::async_trait;
+use rust_decimal::Decimal;
 
 /// Order placement + account state. impl #1 = Alpaca REST (paper). The pipeline is
 /// generic over this, so execution is testable with a fake broker (no live orders).
@@ -15,7 +15,6 @@ pub trait Broker: Send + Sync {
     /// resolve to the already-placed order, never a second submission.
     async fn submit_order(&self, req: &OrderRequest) -> Result<Order, BrokerError>;
 }
-
 
 #[async_trait]
 impl<T: Broker + ?Sized> Broker for &T {

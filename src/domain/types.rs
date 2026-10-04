@@ -4,6 +4,7 @@
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// A tradable symbol: `"BTC/USD"` (crypto) or `"AAPL"` (stock). Newtype so it can't
 /// be swapped with an arbitrary string at call sites.
@@ -168,15 +169,19 @@ pub struct Event {
     pub payload: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
 pub enum EarningsHour {
     BeforeOpen,
     AfterClose,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
 pub struct EarningsEvent {
+    #[ts(type = "string")]
     pub symbol: Symbol,
+    #[ts(type = "string")]
     pub date: NaiveDate,
     pub earnings_hour: Option<EarningsHour>,
     pub eps_estimate: Option<f64>,
@@ -185,13 +190,15 @@ pub struct EarningsEvent {
 /// One news item as the vendor tagged it. `ts` is the publish time in epoch millis,
 /// like every other timestamp here. `symbols` is the vendor's tagging, which can be
 /// broader than what the caller asked for; filtering is the caller's job.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
 pub struct Headline {
     pub id: u64,
     pub ts: i64,
     pub headline: String,
     pub source: String,
     pub url: Option<String>,
+    #[ts(type = "string[]")]
     pub symbols: Vec<Symbol>,
 }
 
