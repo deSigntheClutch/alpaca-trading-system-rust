@@ -27,6 +27,17 @@ pub trait BarSource: Send + Sync {
         limit: usize,
     ) -> Result<Vec<Bar>, MarketError>;
 
+    /// Every bar of `timeframe` with `start <= ts < end` (epoch millis), oldest→newest,
+    /// however many pages that takes. This is the history load; `bars` is the recent
+    /// window. Half-open so `end = midnight today` means "through yesterday's close".
+    async fn bars_range(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<Bar>, MarketError>;
+
     /// `bars` at the daily timeframe — what the pipeline and backtest read.
     async fn daily_bars(&self, symbol: &Symbol, limit: usize) -> Result<Vec<Bar>, MarketError> {
         self.bars(symbol, Timeframe::Day1, limit).await
@@ -45,6 +56,16 @@ impl<T: BarSource + ?Sized> BarSource for &T {
         limit: usize,
     ) -> Result<Vec<Bar>, MarketError> {
         (**self).bars(symbol, timeframe, limit).await
+    }
+
+    async fn bars_range(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<Bar>, MarketError> {
+        (**self).bars_range(symbol, timeframe, start, end).await
     }
 
     async fn daily_bars(&self, symbol: &Symbol, limit: usize) -> Result<Vec<Bar>, MarketError> {

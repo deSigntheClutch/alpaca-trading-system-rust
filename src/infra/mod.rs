@@ -12,10 +12,14 @@
 //!     `store.rs`  — `Store`: `ScyllaStore`, `MemStore`
 //!     `llm.rs`    — `LlmClient`: `Claude`, `Bedrock`
 //!     `news.rs`   — `NewsSource`: `AlpacaNews`
+//!   - `bar_store.rs` — `BarFileStore`, the JSONL files under `data/bars/` that the
+//!     backfill writes and `LocalBars` (#47) will read. Not a port impl; the storage
+//!     primitive both of those share.
 //!
 //! New port → a new file here (e.g. `fundamentals.rs` for `EarningsCalendar`).
 //! New vendor → a new file under `clients/`.
 
+pub mod bar_store;
 pub mod broker;
 pub mod clients;
 pub mod llm;
@@ -23,6 +27,7 @@ pub mod market;
 pub mod news;
 pub mod store;
 
+pub use bar_store::{Appended, BarFileStore};
 pub use broker::AlpacaBroker;
 pub use clients::{AlpacaClient, AnthropicClient, BedrockClient, FinnhubClient};
 pub use llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};

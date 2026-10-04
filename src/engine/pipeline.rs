@@ -153,9 +153,7 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         let mut debate = String::new();
         for _round in 0..self.cfg.debate_rounds {
             for r in &self.researchers {
-                let turn = r
-                    .argue(&self.llm, symbol, &analysis, &sig, &debate)
-                    .await?;
+                let turn = r.argue(&self.llm, symbol, &analysis, &sig, &debate).await?;
                 self.append(
                     symbol,
                     ts,
@@ -338,6 +336,18 @@ mod tests {
                     volume: 1.0,
                 })
                 .collect();
+            Ok(bars)
+        }
+
+        async fn bars_range(
+            &self,
+            symbol: &Symbol,
+            timeframe: Timeframe,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<Bar>, MarketError> {
+            let mut bars = self.bars(symbol, timeframe, 0).await?;
+            bars.retain(|b| b.ts >= start && b.ts < end);
             Ok(bars)
         }
     }

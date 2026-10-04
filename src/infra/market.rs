@@ -17,7 +17,7 @@ use crate::domain::error::MarketError;
 use crate::domain::types::{AssetClass, Bar, Symbol, Tick, Timeframe};
 use crate::traits::{BarSource, MarketStream};
 
-use super::clients::alpaca::{BarsResponse, Host};
+use super::clients::alpaca::{BarsResponse, Host, RawBar};
 use super::clients::{parse_rfc3339_millis, AlpacaClient};
 
 // ---- AlpacaBars -------------------------------------------------------------------
@@ -50,13 +50,49 @@ fn lookback_days(class: AssetClass, timeframe: Timeframe, limit: usize) -> usize
     }
 }
 
+/// Alpaca caps one bars page at this many rows.
+const MAX_PAGE: usize = 10_000;
+
+/// Endpoint and the class-specific query parameters shared by both fetch shapes.
+/// `adjustment=all` folds splits and dividends into history so a 4:1 split is not a
+/// -75% bar; the crypto endpoint has no such parameter.
+fn endpoint(class: AssetClass) -> (&'static str, &'static [(&'static str, &'static str)]) {
+    match class {
+        AssetClass::Crypto => ("/v1beta3/crypto/us/bars", &[]),
+        AssetClass::Stock => ("/v2/stocks/bars", &[("adjustment", "all")]),
+    }
+}
+
+/// Wire → domain for one symbol's rows; a row whose timestamp does not parse is
+/// dropped rather than given a made-up time.
+fn into_bars(symbol: &Symbol, raws: Vec<RawBar>) -> Vec<Bar> {
+    raws.into_iter()
+        .filter_map(|r| {
+            Some(Bar {
+                symbol: symbol.clone(),
+                ts: parse_rfc3339_millis(&r.t)?,
+                open: r.o,
+                high: r.h,
+                low: r.l,
+                close: r.c,
+                volume: r.v,
+            })
+        })
+        .collect()
+}
+
+fn rfc3339(ms: i64) -> Result<String, MarketError> {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .ok_or_else(|| MarketError::Request(format!("timestamp out of range: {ms}")))
+}
+
 #[async_trait]
 impl BarSource for AlpacaBars {
     /// Most-recent `limit` bars of `timeframe`, returned oldest→newest (what
     /// `signals::compute` wants). One symbol per request: Alpaca fills a multi-symbol
     /// `limit` symbol by symbol, so batching buys nothing here. Callers wanting
-    /// several symbols run these concurrently; the backfill's range fetch is a
-    /// separate method (#30).
+    /// several symbols run these concurrently.
     async fn bars(
         &self,
         symbol: &Symbol,
@@ -64,10 +100,7 @@ impl BarSource for AlpacaBars {
         limit: usize,
     ) -> Result<Vec<Bar>, MarketError> {
         let class = symbol.asset_class();
-        let path = match class {
-            AssetClass::Crypto => "/v1beta3/crypto/us/bars",
-            AssetClass::Stock => "/v2/stocks/bars",
-        };
+        let (path, extra) = endpoint(class);
 
         // Without an explicit `start`, Alpaca returns only the current day's bars. Look
         // back far enough in calendar days that `limit` bars actually come back;
@@ -84,31 +117,69 @@ impl BarSource for AlpacaBars {
             ("start", &start),
             ("sort", "desc"), // newest first, so `limit` gives the RECENT window
         ];
-        if class == AssetClass::Stock {
-            // Fold splits and dividends into history so a 4:1 split is not a -75% bar.
-            // The crypto endpoint has no such parameter.
-            params.push(("adjustment", "all"));
-        }
+        params.extend_from_slice(extra);
 
         let mut parsed: BarsResponse = self.client.get_json(Host::Data, path, &params).await?;
-
-        let raws = parsed.bars.remove(symbol.as_str()).unwrap_or_default();
-        let mut bars: Vec<Bar> = raws
-            .into_iter()
-            .filter_map(|r| {
-                Some(Bar {
-                    symbol: symbol.clone(),
-                    ts: parse_rfc3339_millis(&r.t)?,
-                    open: r.o,
-                    high: r.h,
-                    low: r.l,
-                    close: r.c,
-                    volume: r.v,
-                })
-            })
-            .collect();
+        let mut bars = into_bars(
+            symbol,
+            parsed.bars.remove(symbol.as_str()).unwrap_or_default(),
+        );
         bars.reverse(); // desc -> asc (chronological)
         Ok(bars)
+    }
+
+    /// Everything in `[start, end)`, oldest first, following `next_page_token` until
+    /// the vendor runs out. Pages are 10,000 rows, so ten years of daily bars is one
+    /// request and five years of hourly is two. The range is also enforced locally:
+    /// Alpaca's `end` is inclusive and we want half-open.
+    async fn bars_range(
+        &self,
+        symbol: &Symbol,
+        timeframe: Timeframe,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<Bar>, MarketError> {
+        if start >= end {
+            return Ok(Vec::new());
+        }
+        let class = symbol.asset_class();
+        let (path, extra) = endpoint(class);
+        let (start_s, end_s) = (rfc3339(start)?, rfc3339(end)?);
+        let page = MAX_PAGE.to_string();
+
+        let mut base: Vec<(&str, &str)> = vec![
+            ("symbols", symbol.as_str()),
+            ("timeframe", timeframe.as_str()),
+            ("start", &start_s),
+            ("end", &end_s),
+            ("limit", &page),
+            ("sort", "asc"),
+        ];
+        base.extend_from_slice(extra);
+
+        let mut out: Vec<Bar> = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut parsed: BarsResponse = {
+                let mut params = base.clone();
+                if let Some(tok) = &page_token {
+                    params.push(("page_token", tok.as_str()));
+                }
+                self.client.get_json(Host::Data, path, &params).await?
+            };
+            let rows = parsed.bars.remove(symbol.as_str()).unwrap_or_default();
+            let got = rows.len();
+            out.extend(into_bars(symbol, rows));
+            match parsed.next_page_token {
+                Some(tok) if !tok.is_empty() && got > 0 => page_token = Some(tok),
+                _ => break,
+            }
+        }
+
+        out.retain(|b| b.ts >= start && b.ts < end);
+        out.sort_by_key(|b| b.ts);
+        out.dedup_by_key(|b| b.ts);
+        Ok(out)
     }
 }
 

@@ -94,11 +94,14 @@ fn normalize_trade_base(base: &str) -> String {
 
 // ---- wire types -------------------------------------------------------------------
 
-/// Bars response, same shape for crypto and stocks: `{ "bars": { "BTC/USD": [ {...} ] } }`.
+/// Bars response, same shape for crypto and stocks:
+/// `{ "bars": { "BTC/USD": [ {...} ] }, "next_page_token": "..." | null }`.
 #[derive(Deserialize)]
 pub(crate) struct BarsResponse {
     #[serde(default)]
     pub(crate) bars: std::collections::HashMap<String, Vec<RawBar>>,
+    #[serde(default)]
+    pub(crate) next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
