@@ -12,8 +12,8 @@ use alpaca_trading_system::domain::types::{Side, Symbol};
 use alpaca_trading_system::engine::backtest::{self, BacktestConfig};
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::{
-    AlpacaBars, AlpacaBroker, AlpacaClient, AnthropicClient, Bedrock, BedrockClient, Claude,
-    MemStore, ScyllaStore, BEDROCK_SONNET, SONNET,
+    AlpacaBars, AlpacaBroker, AlpacaClient, AnthropicClient, BarFileStore, Bedrock, BedrockClient,
+    Claude, LocalBars, MemStore, ScyllaStore, BEDROCK_SONNET, SONNET,
 };
 use alpaca_trading_system::traits::{BarSource, Broker, LlmClient, Store};
 use rust_decimal::Decimal;
@@ -76,7 +76,15 @@ async fn main() -> anyhow::Result<()> {
         cfg.alpaca_trade_base.clone(),
         cfg.alpaca_data_base.clone(),
     ));
-    let bars = AlpacaBars::new(alpaca.clone());
+    // Bars come from the local JSONL store first; Alpaca is asked only for what the
+    // files lack (cold symbol, newer bars, periodic refresh) and the answer is written
+    // through. BAR_STORE points at the root the backfill writes to.
+    let bar_root = std::env::var("BAR_STORE").unwrap_or_else(|_| "data/bars".into());
+    let bars = LocalBars::new(
+        Arc::new(BarFileStore::new(bar_root.clone())),
+        AlpacaBars::new(alpaca.clone()),
+    );
+    println!("bars       : {bar_root} (local-first, Alpaca on miss)");
     let broker = AlpacaBroker::new(alpaca.clone());
 
     let strat = cfg.strategies.first().context("no strategies configured")?;
