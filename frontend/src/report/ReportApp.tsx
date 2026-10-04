@@ -94,9 +94,6 @@ export function ReportApp() {
       <header className="row">
         <h1>Morning report</h1>
         <span className="dim">rule picks the names · scorecard says whether it worked</span>
-        <a className="right dim" href="/backtest/">
-          backtest →
-        </a>
       </header>
 
       <Section n={1} title="Morning" sub="选哪一天的报告 · 没有存报告的日子会当场回放" />
