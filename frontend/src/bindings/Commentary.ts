@@ -12,4 +12,4 @@ summary: string, watch_reason: WatchReason,
 /**
  * One sentence: what would make this a bad idea.
  */
-risk: string, model: string, generated_at: bigint, };
+risk: string, model: string, generated_at: number, };

@@ -4,7 +4,7 @@ export type Regime = { symbol: string,
 /**
  * Timestamp of the close used, epoch millis.
  */
-as_of: bigint, close: number, sma: number, window: number, above: boolean, 
+as_of: number, close: number, sma: number, window: number, above: boolean, 
 /**
  * `(close / sma − 1) × 100`; negative when below.
  */

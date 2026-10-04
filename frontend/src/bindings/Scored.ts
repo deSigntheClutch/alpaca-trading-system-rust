@@ -14,4 +14,4 @@ change_1d: number | null, change_5d: number | null, change_20d: number | null,
 /**
  * Timestamp of the bar the score was computed on, epoch millis.
  */
-as_of: bigint, bars: number, };
+as_of: number, bars: number, };

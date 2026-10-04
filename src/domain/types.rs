@@ -82,10 +82,13 @@ impl From<String> for Symbol {
 }
 
 /// One OHLCV bar. OHLCV are f64 on purpose — they feed `signals`/`data` math.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
 pub struct Bar {
+    #[ts(type = "string")]
     pub symbol: Symbol,
     /// Unix epoch milliseconds.
+    #[ts(type = "number")]
     pub ts: i64,
     pub open: f64,
     pub high: f64,
@@ -193,7 +196,9 @@ pub struct EarningsEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/bindings/")]
 pub struct Headline {
+    #[ts(type = "number")]
     pub id: u64,
+    #[ts(type = "number")]
     pub ts: i64,
     pub headline: String,
     pub source: String,

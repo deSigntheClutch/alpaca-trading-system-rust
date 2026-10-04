@@ -4,7 +4,7 @@
  * One pick's realised outcome over a horizon: bought at the open of the first
  * session on or after the report date, sold at the close of the `h`-th session.
  */
-export type PickOutcome = { symbol: string, entry_ts: bigint, entry: number, exit_ts: bigint, exit: number, 
+export type PickOutcome = { symbol: string, entry_ts: number, entry: number, exit_ts: number, exit: number, 
 /**
  * `exit / entry − 1`.
  */

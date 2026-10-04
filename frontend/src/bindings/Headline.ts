@@ -5,4 +5,4 @@
  * like every other timestamp here. `symbols` is the vendor's tagging, which can be
  * broader than what the caller asked for; filtering is the caller's job.
  */
-export type Headline = { id: bigint, ts: bigint, headline: string, source: string, url: string | null, symbols: string[], };
+export type Headline = { id: number, ts: number, headline: string, source: string, url: string | null, symbols: string[], };

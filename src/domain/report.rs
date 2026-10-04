@@ -16,6 +16,7 @@ pub struct Regime {
     #[ts(type = "string")]
     pub symbol: Symbol,
     /// Timestamp of the close used, epoch millis.
+    #[ts(type = "number")]
     pub as_of: i64,
     pub close: f64,
     pub sma: f64,
@@ -47,6 +48,7 @@ pub struct Scored {
     pub change_5d: Option<f64>,
     pub change_20d: Option<f64>,
     /// Timestamp of the bar the score was computed on, epoch millis.
+    #[ts(type = "number")]
     pub as_of: i64,
     pub bars: usize,
 }
@@ -72,6 +74,7 @@ pub struct Aggregate {
 #[ts(export, export_to = "frontend/src/bindings/")]
 pub struct Screen {
     /// Newest bar timestamp across all scored names, epoch millis.
+    #[ts(type = "number")]
     pub as_of: i64,
     /// Every scored name, ETFs included, best score first; ties broken by symbol.
     pub ranked: Vec<Scored>,
@@ -80,6 +83,7 @@ pub struct Screen {
     pub by_sector: Vec<Aggregate>,
     pub by_theme: Vec<Aggregate>,
     pub skipped: Vec<Skipped>,
+    #[ts(type = "number")]
     pub elapsed_ms: u64,
 }
 
@@ -107,6 +111,7 @@ pub struct Commentary {
     /// One sentence: what would make this a bad idea.
     pub risk: String,
     pub model: String,
+    #[ts(type = "number")]
     pub generated_at: i64,
 }
 
@@ -128,11 +133,14 @@ pub struct Pick {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/bindings/")]
 pub struct RunStats {
+    #[ts(type = "number")]
     pub elapsed_ms: u64,
     pub warnings: Vec<String>,
     pub llm_calls: u32,
     pub llm_cached: u32,
+    #[ts(type = "number")]
     pub llm_input_tokens: u64,
+    #[ts(type = "number")]
     pub llm_output_tokens: u64,
     pub llm_cost_usd: f64,
 }
@@ -144,8 +152,10 @@ pub struct RunStats {
 pub struct PickOutcome {
     #[ts(type = "string")]
     pub symbol: Symbol,
+    #[ts(type = "number")]
     pub entry_ts: i64,
     pub entry: f64,
+    #[ts(type = "number")]
     pub exit_ts: i64,
     pub exit: f64,
     /// `exit / entry − 1`.
@@ -208,6 +218,7 @@ pub struct MorningReport {
     /// Report date, UTC.
     #[ts(type = "string")]
     pub date: NaiveDate,
+    #[ts(type = "number")]
     pub generated_at: i64,
     pub regime: Option<Regime>,
     pub picks: Vec<Pick>,
