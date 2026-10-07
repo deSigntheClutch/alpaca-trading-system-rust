@@ -1,166 +1,166 @@
-symbol,name,sector,themes,region
-AMD,AMD,semis,ai|datacenter|cpu|gpu,US
-ARM,Arm Holdings,semis,ai|mobile|ip-licensing,UK
-AVGO,Broadcom,semis,ai|datacenter|networking|dividend,US
-CBRS,Cerebras Systems,semis,ai|datacenter,US
-INTC,Intel,semis,cpu|foundry|ai,US
-MRVL,Marvell,semis,ai|datacenter|networking|custom-silicon,US
-MU,Micron,semis,memory|ai,US
-NVDA,Nvidia,semis,ai|datacenter|gpu,US
-QCOM,Qualcomm,semis,mobile|ai|auto|dividend,US
-SNDK,Sandisk,semis,memory|nand|storage,US
-TSM,TSMC,semis,foundry|ai,TW
-TXN,Texas Instruments,semis,analog|industrial|auto|dividend,US
-AAOI,Applied Optoelectronics,hardware,optical|ai|datacenter,US
-AAPL,Apple,hardware,ai|consumer-electronics,US
-DELL,Dell Technologies,hardware,ai|datacenter|servers|pc,US
-GPRO,GoPro,hardware,consumer-electronics,US
-HPQ,HP,hardware,pc|printers|dividend,US
-KOSS,Koss,hardware,consumer-electronics|meme,US
-QUBT,Quantum Computing Inc,hardware,quantum|photonics,US
-SMCI,Super Micro Computer,hardware,ai|datacenter|servers,US
-BB,BlackBerry,software,cybersecurity|auto,CA
-CRM,Salesforce,software,saas|cloud|ai,US
-CRWD,CrowdStrike,software,cybersecurity|cloud|ai,US
-FIG,Figma,software,saas|design|ai,US
-FSLY,Fastly,software,cloud|edge|cdn,US
-IBM,IBM,software,ai|cloud|consulting|quantum|dividend,US
-MSFT,Microsoft,software,ai|cloud|saas|gaming|dividend,US
-NBIS,Nebius,software,ai|datacenter|cloud|neocloud,EU
-NET,Cloudflare,software,cloud|cybersecurity|edge|ai,US
-NOW,ServiceNow,software,saas|ai|enterprise,US
-ORCL,Oracle,software,cloud|ai|datacenter|database,US
-PANW,Palo Alto Networks,software,cybersecurity|ai,US
-PLTR,Palantir,software,ai|defense|data,US
-SHOP,Shopify,software,e-commerce|ai,CA
-SNOW,Snowflake,software,cloud|data|ai,US
-SOUN,SoundHound AI,software,ai|voice,US
-VERI,Veritone,software,ai|media,US
-ZM,Zoom,software,saas|collaboration|ai,US
-ABNB,Airbnb,internet,travel|platform,US
-AMZN,Amazon,internet,e-commerce|cloud|ai,US
-BABA,Alibaba,internet,e-commerce|cloud|ai|china,CN
-BIDU,Baidu,internet,ai|search|robotaxi|china,CN
-BILI,Bilibili,internet,gaming|streaming|china,CN
-CHWY,Chewy,internet,e-commerce|pets,US
-CVNA,Carvana,internet,e-commerce|auto,US
-DASH,DoorDash,internet,delivery|platform,US
-DJT,Trump Media,internet,social|meme,US
-ETSY,Etsy,internet,e-commerce|marketplace,US
-GOOG,Alphabet C,internet,ai|cloud|search|ads,US
-GOOGL,Alphabet A,internet,ai|cloud|search|ads,US
-JD,JD.com,internet,e-commerce|logistics|china,CN
-LYFT,Lyft,internet,ridesharing|platform,US
-META,Meta Platforms,internet,ai|social|ads|vr,US
-NTES,NetEase,internet,gaming|china,CN
-OPEN,Opendoor,internet,real-estate|ibuying|meme,US
-PDD,PDD Holdings,internet,e-commerce|china,CN
-PINS,Pinterest,internet,social|ads,US
-RBLX,Roblox,internet,gaming|platform,US
-REAL,The RealReal,internet,e-commerce|resale|luxury,US
-SNAP,Snap,internet,social|ads|ar,US
-TCEHY,Tencent,internet,gaming|social|cloud|ai|china,CN
-UBER,Uber,internet,ridesharing|delivery|platform|robotaxi,US
-AMC,AMC Entertainment,media,theaters|meme,US
-DIS,Disney,media,streaming|parks,US
-FLNT,Fluent,media,adtech,US
-IHRT,iHeartMedia,media,radio|podcasts,US
-NFLX,Netflix,media,streaming,US
-NTDOY,Nintendo,media,gaming|console,JP
-ROKU,Roku,media,streaming|adtech,US
-NOK,Nokia,telecom,networking|5g|datacenter,EU
-BTBT,Bit Digital,crypto,bitcoin-mining|ai|datacenter,US
-COIN,Coinbase,crypto,bitcoin|exchange|fintech,US
-CORZ,Core Scientific,crypto,bitcoin-mining|ai|datacenter,US
-CRCL,Circle Internet,crypto,stablecoin|fintech,US
-EBON,Ebang International,crypto,mining-hardware|china,CN
-RIOT,Riot Platforms,crypto,bitcoin-mining|ai|datacenter,US
-AEI,Alset,finance,holding|real-estate,US
-BAC,Bank of America,finance,bank|dividend,US
-BFH,Bread Financial,finance,credit-cards|fintech,US
-HOOD,Robinhood,finance,brokerage|fintech|crypto,US
-IBKR,Interactive Brokers,finance,brokerage|fintech,US
-JFU,9F,finance,fintech|china,CN
-JPM,JPMorgan Chase,finance,bank|dividend,US
-KLAR,Klarna,finance,fintech|bnpl|payments,EU
-LU,Lufax,finance,fintech|china,CN
-MS,Morgan Stanley,finance,bank|wealth-management|dividend,US
-NMR,Nomura,finance,bank|brokerage,JP
-PYPL,PayPal,finance,fintech|payments,US
-GOOD,Gladstone Commercial,reit,net-lease|dividend,US
-PSA,Public Storage,reit,self-storage|dividend,US
-RC,Ready Capital,reit,mortgage|dividend,US
-COST,Costco,retail,warehouse-club|dividend,US
-GAP,Gap,retail,apparel,US
-GME,GameStop,retail,gaming|meme|bitcoin,US
-MNSO,Miniso,retail,variety-stores|china,CN
-WMT,Walmart,retail,big-box|e-commerce|dividend,US
-ACB,Aurora Cannabis,consumer,cannabis,CA
-BIRD,Smartbird,consumer,apparel,US
-BYND,Beyond Meat,consumer,food|meme,US
-KRUS,Kura Sushi USA,consumer,restaurants,US
-MCD,McDonald's,consumer,restaurants|dividend,US
-RLX,RLX Technology,consumer,vaping|china,CN
-SBUX,Starbucks,consumer,restaurants|dividend,US
-UA,Under Armour C,consumer,apparel|sportswear,US
-WNW,Meiwu Technology,consumer,e-commerce|china,CN
-AAL,American Airlines,travel,airline,US
-CAR,Avis Budget,travel,car-rental,US
-H,Hyatt Hotels,travel,hotels,US
-TOUR,Tuniu,travel,online-travel|china,CN
-ABBV,AbbVie,healthcare,pharma|dividend,US
-BNGO,Bionano Genomics,healthcare,genomics|biotech,US
-GILD,Gilead Sciences,healthcare,pharma|biotech|dividend,US
-HIMS,Hims & Hers Health,healthcare,telehealth|dtc|glp1,US
-MRNA,Moderna,healthcare,biotech|mrna,US
-NVO,Novo Nordisk,healthcare,pharma|glp1|dividend,EU
-PFE,Pfizer,healthcare,pharma|dividend,US
-PGNY,Progyny,healthcare,benefits|fertility,US
-TEM,Tempus AI,healthcare,ai|genomics|diagnostics,US
-VKTX,Viking Therapeutics,healthcare,biotech|glp1,US
-BE,Bloom Energy,energy,ai|datacenter|cleanenergy,US
-CVX,Chevron,energy,oil-gas|dividend,US
-FSLR,First Solar,energy,solar|cleanenergy,US
-NNE,Nano Nuclear Energy,energy,nuclear|smr,US
-OKLO,Oklo,energy,nuclear|smr|ai,US
-SHEL,Shell,energy,oil-gas|dividend,UK
-SM,SM Energy,energy,oil-gas,US
-TE,T1 Energy,energy,solar|batteries|cleanenergy,US
-NEE,NextEra Energy,utilities,renewables|cleanenergy|dividend,US
-VST,Vistra,utilities,ai|datacenter|nuclear,US
-LAC,Lithium Americas,materials,lithium|mining|ev,CA
-LIN,Linde,materials,industrial-gases|hydrogen|dividend,EU
-AMSC,American Superconductor,industrial,grid|power-electronics|defense,US
-ASTC,Astrotech,industrial,instruments|space,US
-AVAV,AeroVironment,industrial,defense|drones,US
-BA,Boeing,industrial,aerospace|defense,US
-FLY,Firefly Aerospace,industrial,space|defense,US
-KODK,Eastman Kodak,industrial,printing|chemicals,US
-P,Everpure,industrial,water,US
-RKLB,Rocket Lab,industrial,space|defense,US
-SPCX,SpaceX,industrial,space|defense|satellite,US
-BYDDY,BYD,auto,ev|batteries|china,CN
-LI,Li Auto,auto,ev|china,CN
-NIO,NIO,auto,ev|china,CN
-POAHY,Porsche SE,auto,holding|ev|luxury,EU
-QS,QuantumScape,auto,ev|batteries|solid-state,US
-RIVN,Rivian,auto,ev,US
-TSLA,Tesla,auto,ev|ai|robotics|energy-storage,US
-XPEV,XPeng,auto,ev|robotaxi|ai|china,CN
-BBJP,JPMorgan BetaBuilders Japan,etf,japan|equity-index,JP
-DRAM,Roundhill Memory ETF,etf,memory|semis,US
-EWY,iShares MSCI South Korea,etf,korea|equity-index,KR
-FOTO,Tuttle Pure Play Photonics,etf,photonics|optical|ai,US
-FXY,Invesco Japanese Yen Trust,etf,currency|yen,JP
-GLD,SPDR Gold Shares,etf,gold|commodity,US
-IAU,iShares Gold Trust,etf,gold|commodity,US
-QQQ,Invesco QQQ,etf,nasdaq-100|equity-index|tech,US
-SLV,iShares Silver Trust,etf,silver|commodity,US
-SPY,SPDR S&P 500,etf,sp500|equity-index,US
-SPYM,SPDR Portfolio S&P 500,etf,sp500|equity-index,US
-TLT,iShares 20+ Year Treasury,etf,treasuries|bonds|rates,US
-USO,United States Oil Fund,etf,oil|commodity,US
-USOY,Defiance Oil Enhanced Options Income,etf,oil|options-income|commodity,US
-UUP,Invesco DB US Dollar Bullish,etf,dollar|currency,US
-VOO,Vanguard S&P 500,etf,sp500|equity-index,US
-RVI,Robinhood Ventures Fund I,fund,private-markets|venture,US
+symbol,name,sector,themes,region,watch
+AMD,AMD,semis,ai|datacenter|cpu|gpu,US,
+ARM,Arm Holdings,semis,ai|mobile|ip-licensing,UK,
+AVGO,Broadcom,semis,ai|datacenter|networking|dividend,US,1
+CBRS,Cerebras Systems,semis,ai|datacenter,US,
+INTC,Intel,semis,cpu|foundry|ai,US,
+MRVL,Marvell,semis,ai|datacenter|networking|custom-silicon,US,1
+MU,Micron,semis,memory|ai,US,
+NVDA,Nvidia,semis,ai|datacenter|gpu,US,1
+QCOM,Qualcomm,semis,mobile|ai|auto|dividend,US,
+SNDK,Sandisk,semis,memory|nand|storage,US,
+TSM,TSMC,semis,foundry|ai,TW,
+TXN,Texas Instruments,semis,analog|industrial|auto|dividend,US,
+AAOI,Applied Optoelectronics,hardware,optical|ai|datacenter,US,
+AAPL,Apple,hardware,ai|consumer-electronics,US,
+DELL,Dell Technologies,hardware,ai|datacenter|servers|pc,US,
+GPRO,GoPro,hardware,consumer-electronics,US,
+HPQ,HP,hardware,pc|printers|dividend,US,
+KOSS,Koss,hardware,consumer-electronics|meme,US,
+QUBT,Quantum Computing Inc,hardware,quantum|photonics,US,
+SMCI,Super Micro Computer,hardware,ai|datacenter|servers,US,
+BB,BlackBerry,software,cybersecurity|auto,CA,
+CRM,Salesforce,software,saas|cloud|ai,US,
+CRWD,CrowdStrike,software,cybersecurity|cloud|ai,US,
+FIG,Figma,software,saas|design|ai,US,
+FSLY,Fastly,software,cloud|edge|cdn,US,
+IBM,IBM,software,ai|cloud|consulting|quantum|dividend,US,
+MSFT,Microsoft,software,ai|cloud|saas|gaming|dividend,US,
+NBIS,Nebius,software,ai|datacenter|cloud|neocloud,EU,
+NET,Cloudflare,software,cloud|cybersecurity|edge|ai,US,
+NOW,ServiceNow,software,saas|ai|enterprise,US,
+ORCL,Oracle,software,cloud|ai|datacenter|database,US,
+PANW,Palo Alto Networks,software,cybersecurity|ai,US,
+PLTR,Palantir,software,ai|defense|data,US,
+SHOP,Shopify,software,e-commerce|ai,CA,1
+SNOW,Snowflake,software,cloud|data|ai,US,
+SOUN,SoundHound AI,software,ai|voice,US,
+VERI,Veritone,software,ai|media,US,
+ZM,Zoom,software,saas|collaboration|ai,US,
+ABNB,Airbnb,internet,travel|platform,US,
+AMZN,Amazon,internet,e-commerce|cloud|ai,US,
+BABA,Alibaba,internet,e-commerce|cloud|ai|china,CN,
+BIDU,Baidu,internet,ai|search|robotaxi|china,CN,
+BILI,Bilibili,internet,gaming|streaming|china,CN,
+CHWY,Chewy,internet,e-commerce|pets,US,
+CVNA,Carvana,internet,e-commerce|auto,US,
+DASH,DoorDash,internet,delivery|platform,US,
+DJT,Trump Media,internet,social|meme,US,
+ETSY,Etsy,internet,e-commerce|marketplace,US,
+GOOG,Alphabet C,internet,ai|cloud|search|ads,US,
+GOOGL,Alphabet A,internet,ai|cloud|search|ads,US,
+JD,JD.com,internet,e-commerce|logistics|china,CN,
+LYFT,Lyft,internet,ridesharing|platform,US,
+META,Meta Platforms,internet,ai|social|ads|vr,US,
+NTES,NetEase,internet,gaming|china,CN,
+OPEN,Opendoor,internet,real-estate|ibuying|meme,US,
+PDD,PDD Holdings,internet,e-commerce|china,CN,
+PINS,Pinterest,internet,social|ads,US,
+RBLX,Roblox,internet,gaming|platform,US,
+REAL,The RealReal,internet,e-commerce|resale|luxury,US,
+SNAP,Snap,internet,social|ads|ar,US,
+TCEHY,Tencent,internet,gaming|social|cloud|ai|china,CN,
+UBER,Uber,internet,ridesharing|delivery|platform|robotaxi,US,
+AMC,AMC Entertainment,media,theaters|meme,US,
+DIS,Disney,media,streaming|parks,US,
+FLNT,Fluent,media,adtech,US,
+IHRT,iHeartMedia,media,radio|podcasts,US,
+NFLX,Netflix,media,streaming,US,
+NTDOY,Nintendo,media,gaming|console,JP,
+ROKU,Roku,media,streaming|adtech,US,
+NOK,Nokia,telecom,networking|5g|datacenter,EU,
+BTBT,Bit Digital,crypto,bitcoin-mining|ai|datacenter,US,
+COIN,Coinbase,crypto,bitcoin|exchange|fintech,US,
+CORZ,Core Scientific,crypto,bitcoin-mining|ai|datacenter,US,
+CRCL,Circle Internet,crypto,stablecoin|fintech,US,
+EBON,Ebang International,crypto,mining-hardware|china,CN,
+RIOT,Riot Platforms,crypto,bitcoin-mining|ai|datacenter,US,
+AEI,Alset,finance,holding|real-estate,US,
+BAC,Bank of America,finance,bank|dividend,US,
+BFH,Bread Financial,finance,credit-cards|fintech,US,
+HOOD,Robinhood,finance,brokerage|fintech|crypto,US,1
+IBKR,Interactive Brokers,finance,brokerage|fintech,US,
+JFU,9F,finance,fintech|china,CN,
+JPM,JPMorgan Chase,finance,bank|dividend,US,
+KLAR,Klarna,finance,fintech|bnpl|payments,EU,
+LU,Lufax,finance,fintech|china,CN,
+MS,Morgan Stanley,finance,bank|wealth-management|dividend,US,
+NMR,Nomura,finance,bank|brokerage,JP,
+PYPL,PayPal,finance,fintech|payments,US,
+GOOD,Gladstone Commercial,reit,net-lease|dividend,US,
+PSA,Public Storage,reit,self-storage|dividend,US,
+RC,Ready Capital,reit,mortgage|dividend,US,
+COST,Costco,retail,warehouse-club|dividend,US,
+GAP,Gap,retail,apparel,US,
+GME,GameStop,retail,gaming|meme|bitcoin,US,
+MNSO,Miniso,retail,variety-stores|china,CN,
+WMT,Walmart,retail,big-box|e-commerce|dividend,US,
+ACB,Aurora Cannabis,consumer,cannabis,CA,
+BIRD,Smartbird,consumer,apparel,US,
+BYND,Beyond Meat,consumer,food|meme,US,
+KRUS,Kura Sushi USA,consumer,restaurants,US,
+MCD,McDonald's,consumer,restaurants|dividend,US,
+RLX,RLX Technology,consumer,vaping|china,CN,
+SBUX,Starbucks,consumer,restaurants|dividend,US,
+UA,Under Armour C,consumer,apparel|sportswear,US,
+WNW,Meiwu Technology,consumer,e-commerce|china,CN,
+AAL,American Airlines,travel,airline,US,
+CAR,Avis Budget,travel,car-rental,US,
+H,Hyatt Hotels,travel,hotels,US,
+TOUR,Tuniu,travel,online-travel|china,CN,
+ABBV,AbbVie,healthcare,pharma|dividend,US,
+BNGO,Bionano Genomics,healthcare,genomics|biotech,US,
+GILD,Gilead Sciences,healthcare,pharma|biotech|dividend,US,
+HIMS,Hims & Hers Health,healthcare,telehealth|dtc|glp1,US,
+MRNA,Moderna,healthcare,biotech|mrna,US,
+NVO,Novo Nordisk,healthcare,pharma|glp1|dividend,EU,
+PFE,Pfizer,healthcare,pharma|dividend,US,
+PGNY,Progyny,healthcare,benefits|fertility,US,
+TEM,Tempus AI,healthcare,ai|genomics|diagnostics,US,
+VKTX,Viking Therapeutics,healthcare,biotech|glp1,US,
+BE,Bloom Energy,energy,ai|datacenter|cleanenergy,US,
+CVX,Chevron,energy,oil-gas|dividend,US,
+FSLR,First Solar,energy,solar|cleanenergy,US,
+NNE,Nano Nuclear Energy,energy,nuclear|smr,US,
+OKLO,Oklo,energy,nuclear|smr|ai,US,
+SHEL,Shell,energy,oil-gas|dividend,UK,
+SM,SM Energy,energy,oil-gas,US,
+TE,T1 Energy,energy,solar|batteries|cleanenergy,US,
+NEE,NextEra Energy,utilities,renewables|cleanenergy|dividend,US,
+VST,Vistra,utilities,ai|datacenter|nuclear,US,
+LAC,Lithium Americas,materials,lithium|mining|ev,CA,
+LIN,Linde,materials,industrial-gases|hydrogen|dividend,EU,
+AMSC,American Superconductor,industrial,grid|power-electronics|defense,US,
+ASTC,Astrotech,industrial,instruments|space,US,
+AVAV,AeroVironment,industrial,defense|drones,US,
+BA,Boeing,industrial,aerospace|defense,US,
+FLY,Firefly Aerospace,industrial,space|defense,US,
+KODK,Eastman Kodak,industrial,printing|chemicals,US,
+P,Everpure,industrial,water,US,
+RKLB,Rocket Lab,industrial,space|defense,US,
+SPCX,SpaceX,industrial,space|defense|satellite,US,
+BYDDY,BYD,auto,ev|batteries|china,CN,
+LI,Li Auto,auto,ev|china,CN,
+NIO,NIO,auto,ev|china,CN,
+POAHY,Porsche SE,auto,holding|ev|luxury,EU,
+QS,QuantumScape,auto,ev|batteries|solid-state,US,
+RIVN,Rivian,auto,ev,US,
+TSLA,Tesla,auto,ev|ai|robotics|energy-storage,US,
+XPEV,XPeng,auto,ev|robotaxi|ai|china,CN,
+BBJP,JPMorgan BetaBuilders Japan,etf,japan|equity-index,JP,
+DRAM,Roundhill Memory ETF,etf,memory|semis,US,
+EWY,iShares MSCI South Korea,etf,korea|equity-index,KR,
+FOTO,Tuttle Pure Play Photonics,etf,photonics|optical|ai,US,
+FXY,Invesco Japanese Yen Trust,etf,currency|yen,JP,
+GLD,SPDR Gold Shares,etf,gold|commodity,US,
+IAU,iShares Gold Trust,etf,gold|commodity,US,
+QQQ,Invesco QQQ,etf,nasdaq-100|equity-index|tech,US,
+SLV,iShares Silver Trust,etf,silver|commodity,US,
+SPY,SPDR S&P 500,etf,sp500|equity-index,US,
+SPYM,SPDR Portfolio S&P 500,etf,sp500|equity-index,US,
+TLT,iShares 20+ Year Treasury,etf,treasuries|bonds|rates,US,
+USO,United States Oil Fund,etf,oil|commodity,US,1
+USOY,Defiance Oil Enhanced Options Income,etf,oil|options-income|commodity,US,
+UUP,Invesco DB US Dollar Bullish,etf,dollar|currency,US,
+VOO,Vanguard S&P 500,etf,sp500|equity-index,US,
+RVI,Robinhood Ventures Fund I,fund,private-markets|venture,US,

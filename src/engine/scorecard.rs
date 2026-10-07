@@ -263,6 +263,7 @@ mod tests {
                     commentary: None,
                 })
                 .collect(),
+            watchlist: vec![],
             earnings_this_week: vec![],
             by_sector: vec![],
             by_theme: vec![],

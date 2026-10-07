@@ -10,7 +10,9 @@
 //!
 //! `themes` is a `|`-separated list. ETFs carry `sector = etf` (or `fund`); they
 //! are tracked for aggregates and context but are never buy candidates, see
-//! [`Instrument::is_etf`]. Unknown columns are ignored so the file can grow
+//! [`Instrument::is_etf`]. An optional `watch` column (`1`, `yes`, `true`) marks the
+//! names the owner always wants covered in the report whether or not the rule picks
+//! them; absent column means no watchlist. Unknown columns are ignored so the file can grow
 //! without a code change; a missing required column or a duplicate symbol is a
 //! hard error, because a silently half-loaded universe would skew every report.
 
@@ -35,6 +37,9 @@ pub struct Instrument {
     #[serde(deserialize_with = "pipe_list")]
     pub themes: Vec<String>,
     pub region: String,
+    /// Always covered in the report (headlines + note), with its rank shown.
+    #[serde(default, deserialize_with = "yes_no")]
+    pub watch: bool,
 }
 
 impl Instrument {
@@ -152,6 +157,11 @@ impl Universe {
         self.instruments.iter().filter(|i| i.is_etf())
     }
 
+    /// Names marked `watch` in the file, in file order.
+    pub fn watchlist(&self) -> impl Iterator<Item = &Instrument> {
+        self.instruments.iter().filter(|i| i.watch)
+    }
+
     /// Rows per sector, sectors in alphabetical order (BTreeMap) so a report
     /// renders the same way every day.
     pub fn group_by_sector(&self) -> BTreeMap<&str, Vec<&Instrument>> {
@@ -193,6 +203,19 @@ impl Universe {
 /// `"ai|datacenter|gpu"` → `["ai", "datacenter", "gpu"]`. Whitespace around each
 /// item is dropped, empty items (a trailing `|`, or an empty cell) are skipped.
 /// Items are stored as written; comparisons elsewhere are case-insensitive.
+/// `1`, `yes`, `y`, `true`, `x` (any case) are true; empty, `0`, `no`, `false` are false.
+/// Anything else is an error so a typo in the column is caught at load.
+fn yes_no<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    let raw = String::deserialize(d)?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "0" | "no" | "n" | "false" => Ok(false),
+        "1" | "yes" | "y" | "true" | "x" => Ok(true),
+        other => Err(serde::de::Error::custom(format!(
+            "watch: expected 1/yes/true or empty, got {other:?}"
+        ))),
+    }
+}
+
 fn pipe_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     let raw = String::deserialize(d)?;
     Ok(raw
@@ -347,5 +370,25 @@ BABA,Alibaba,internet,china|e-commerce|cloud|ai,CN
         assert!(u.by_theme("ai").len() >= 40);
         assert!(u.contains(&Symbol::from("SPY")));
         assert_eq!(u.group_by_sector().len(), 20);
+    }
+
+    #[test]
+    fn watch_column_is_optional_and_lenient() {
+        let without = Universe::from_reader(THREE.as_bytes()).unwrap();
+        assert_eq!(without.watchlist().count(), 0, "no column → no watchlist");
+
+        let with = "symbol,name,sector,themes,region,watch\n\
+            NVDA,Nvidia,semis,ai,US,1\n\
+            USO,Oil,etf,oil,US,yes\n\
+            MCD,McDonald's,consumer,dividend,US,\n";
+        let u = Universe::from_reader(with.as_bytes()).unwrap();
+        let w: Vec<&str> = u.watchlist().map(|i| i.symbol.as_str()).collect();
+        assert_eq!(w, vec!["NVDA", "USO"]);
+
+        let bad = "symbol,name,sector,themes,region,watch\nNVDA,Nvidia,semis,ai,US,maybe\n";
+        assert!(
+            Universe::from_reader(bad.as_bytes()).is_err(),
+            "a typo is an error, not a silent no"
+        );
     }
 }

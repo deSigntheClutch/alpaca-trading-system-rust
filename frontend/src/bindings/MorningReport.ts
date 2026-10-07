@@ -6,6 +6,7 @@ import type { Regime } from "./Regime";
 import type { RunStats } from "./RunStats";
 import type { Scorecard } from "./Scorecard";
 import type { Skipped } from "./Skipped";
+import type { WatchItem } from "./WatchItem";
 
 /**
  * The report. One file per day under `data/reports/`, plus `latest.json`.
@@ -15,6 +16,11 @@ export type MorningReport = {
  * Report date, UTC.
  */
 date: string, generated_at: number, regime: Regime | null, picks: Array<Pick>, 
+/**
+ * The owner's always-covered names (`watch` in the universe file), with ranks.
+ * Not part of the scorecard, which measures the rule's picks only.
+ */
+watchlist: Array<WatchItem>, 
 /**
  * Universe names reporting in the next seven days, soonest first.
  */
