@@ -359,9 +359,9 @@ BABA,Alibaba,internet,china|e-commerce|cloud|ai,CN
     fn shipped_universe_loads_clean() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/config/universe.csv");
         let u = Universe::load(path).expect("config/universe.csv parses");
-        assert_eq!(u.len(), 165);
-        assert_eq!(u.etfs().count(), 17, "16 `etf` rows + RVI, a `fund`");
-        assert_eq!(u.buy_candidates().count(), 148);
+        assert_eq!(u.len(), 293);
+        assert_eq!(u.etfs().count(), 23, "22 `etf` rows + RVI, a `fund`");
+        assert_eq!(u.buy_candidates().count(), 270);
         assert!(
             u.iter().all(|i| !i.themes.is_empty()),
             "every row carries a theme"
