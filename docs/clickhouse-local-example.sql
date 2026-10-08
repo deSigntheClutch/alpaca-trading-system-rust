@@ -1,8 +1,8 @@
 -- ================================================================
--- ClickHouse 是一个数据库,里面有多张表。这里建三张,和 #88 的设计一样:
---   bars      原始日线,一行一根 K 线
---   features  因子值,一行一个 (股票, 日期, 因子名)
---   outcomes  事后结果,一行一个 (股票, 日期, 持有天数)
+-- ClickHouse is a database with many tables. This builds the three from #88:
+--   bars      raw daily candles, one row per (symbol, day)
+--   features  factor values, one row per (symbol, day, feature)
+--   outcomes  what happened next, one row per (symbol, day, holding period)
 -- ================================================================
 
 CREATE TABLE bars (
@@ -12,19 +12,19 @@ CREATE TABLE bars (
     volume    Float64
 ) ENGINE = MergeTree ORDER BY (symbol, ts);
 
--- 直接从仓库里的 JSONL 文件灌进去(ts 是毫秒 epoch)
+-- Load straight from the repo's JSONL files (ts is epoch milliseconds)
 INSERT INTO bars
 SELECT symbol, toDateTime(intDiv(ts, 1000)), open, high, low, close, volume
 FROM file('bars/*.jsonl', JSONEachRow);
 
-SELECT '== bars: 一行一根 K 线 ==' AS note;
+SELECT '== bars: one row per candle ==' AS note;
 SELECT symbol, toDate(ts) AS day, close, volume FROM bars WHERE symbol = 'NVDA' ORDER BY ts DESC LIMIT 3;
 SELECT symbol, count() AS rows, min(toDate(ts)) AS first, max(toDate(ts)) AS last FROM bars GROUP BY symbol ORDER BY symbol;
 
 -- ----------------------------------------------------------------
--- features:从 bars 算出来。这里算两个因子:
---   mom_12_1   12 个月前到 1 个月前的涨幅(约 252 到 21 个交易日)
---   hi52_dist  收盘价离 52 周最高价的距离(0 = 正在创新高)
+-- features: derived from bars. Two factors here:
+--   mom_12_1   return from 12 months ago to 1 month ago (about 252 to 21 trading days)
+--   hi52_dist  distance from close to the 52-week high (0 = making a new high)
 -- ----------------------------------------------------------------
 CREATE TABLE features (
     symbol  LowCardinality(String),
@@ -50,15 +50,15 @@ FROM (
   FROM bars
 );
 
-SELECT '== features: 一行一个 (股票, 日, 因子) ==' AS note;
+SELECT '== features: one row per (symbol, day, feature) ==' AS note;
 SELECT * FROM features WHERE symbol = 'NVDA' AND day = '2026-09-30' ORDER BY feature;
-SELECT '-- 2026-09-30 这天按动量排名:' AS note;
+SELECT '-- momentum ranking on 2026-09-30:' AS note;
 SELECT symbol, round(value, 3) AS mom_12_1, rank() OVER (ORDER BY value DESC) AS rnk
 FROM features WHERE feature = 'mom_12_1' AND day = '2026-09-30' ORDER BY rnk;
 
 -- ----------------------------------------------------------------
--- outcomes:同样从 bars 算。每只股票每一天,往后 5 天和 20 天的收益,
--- 以及减去 SPY 同期收益后的超额收益。这就是 scorecard 用的表。
+-- outcomes: also derived from bars. For every symbol and day, the return over the
+-- next 5 and 20 days, and the excess over SPY's return in the same window. This is the scorecard's table.
 -- ----------------------------------------------------------------
 CREATE TABLE outcomes (
     symbol  LowCardinality(String),
@@ -82,15 +82,15 @@ UNION ALL
 SELECT f.symbol, f.day, 20 AS horizon, f.c20 / f.close - 1 AS fwd_ret, fwd_ret - spy.s20 AS excess
 FROM fwd f JOIN spy ON spy.day = f.day WHERE f.symbol != 'SPY' AND f.c20 > 0;
 
-SELECT '== outcomes: 一行一个 (股票, 日, 持有天数) ==' AS note;
+SELECT '== outcomes: one row per (symbol, day, horizon) ==' AS note;
 SELECT symbol, day, horizon, round(fwd_ret * 100, 2) AS fwd_pct, round(excess * 100, 2) AS vs_spy_pct
 FROM outcomes WHERE symbol = 'NVDA' AND day = '2026-08-28' ORDER BY horizon;
 
 -- ----------------------------------------------------------------
--- IC 表:这就是 #59。features JOIN outcomes,按因子、年、持有天数,
--- 算因子值和前瞻收益的 Spearman 秩相关。
+-- IC table: this is #59. features JOIN outcomes, grouped by feature, year and horizon,
+-- Spearman rank correlation between the factor value and the forward return.
 -- ----------------------------------------------------------------
-SELECT '== IC table: 因子 × 年 × horizon ==' AS note;
+SELECT '== IC table: feature x year x horizon ==' AS note;
 SELECT feature, toYear(day) AS year, horizon,
        round(avg(ic), 3) AS mean_ic,
        round(avg(ic) / stddevSamp(ic), 2) AS ir,
