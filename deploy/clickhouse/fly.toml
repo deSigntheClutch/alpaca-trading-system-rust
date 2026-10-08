@@ -1,0 +1,55 @@
+# ClickHouse on Fly.io — the research store (#88): bars, features, outcomes.
+#
+# One machine, one volume. Nothing here can place an order: this app holds
+# analytics data only. Password lives in `fly secrets`, never in this file.
+#
+#   fly apps create alpaca-clickhouse
+#   fly volumes create chdata --region sjc --size 3 -a alpaca-clickhouse
+#   fly secrets set CLICKHOUSE_PASSWORD="$(openssl rand -hex 24)" -a alpaca-clickhouse
+#   fly deploy -c deploy/clickhouse/fly.toml
+#
+# Then from your laptop, HTTPS on 443 is proxied to ClickHouse's 8123:
+#   curl -u alpaca:$PW 'https://alpaca-clickhouse.fly.dev/?query=SELECT%201'
+
+app = "alpaca-clickhouse"
+primary_region = "sjc"
+
+[build]
+  image = "clickhouse/clickhouse-server:lts"
+
+[env]
+  CLICKHOUSE_DB = "alpaca"
+  CLICKHOUSE_USER = "alpaca"
+  # Lets the `alpaca` user create further users/grants if we ever need a
+  # read-only role for the MCP server.
+  CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT = "1"
+
+[[mounts]]
+  source = "chdata"
+  destination = "/var/lib/clickhouse"
+  initial_size = "3gb"
+
+# HTTP interface only. The native protocol (9000) stays inside the Fly
+# private network; reach it with `fly proxy 9000 -a alpaca-clickhouse`.
+[http_service]
+  internal_port = 8123
+  force_https = true
+  auto_stop_machines = "off"     # a database that sleeps loses its page cache; it is small anyway
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 100
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "20s"
+  method = "GET"
+  path = "/ping"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
