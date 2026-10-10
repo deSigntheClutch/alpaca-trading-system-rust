@@ -6,8 +6,9 @@
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
 
+use crate::domain::dto::Arm;
 use crate::domain::error::PipelineError;
-use crate::domain::signals;
+use crate::domain::signals::{self, Rating, Signal};
 use crate::domain::types::{Action, Decision, OrderRequest, Position, Side, Symbol};
 use crate::engine::agents::{
     analyst::Analyst,
@@ -19,6 +20,9 @@ use crate::traits::{BarSource, Broker, LlmClient, Store};
 
 pub struct PipelineConfig {
     pub strategy_id: String,
+    /// `Rule` maps the signal's rating to an action with no model call; `Llm` runs
+    /// analyst → trader; `LlmDebate` adds `debate_rounds` bull/bear rounds in between.
+    pub arm: Arm,
     /// How many daily bars to pull for the signal window (needs ≥20).
     pub bar_window: usize,
     pub max_notional: Decimal,
@@ -133,6 +137,43 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         )
         .await;
 
+        // Rule arm (#32): rating → action, no model. Same guards, same WAL steps minus
+        // the agent ones, so the control arm differs from the LLM arm by exactly the
+        // decision function and nothing else.
+        if self.cfg.arm == Arm::Rule {
+            let positions = self.broker.positions().await?;
+            let position_qty = position_qty_for(&positions, symbol);
+            let buying_power = self.broker.buying_power().await?;
+            let mut decision = rule_decision(symbol, &sig);
+            // Size here, not in the guards: a buy is one max_notional clip, a sell is
+            // the whole position. The guards still clamp to buying power.
+            decision.qty = match decision.action {
+                Action::Buy if price > Decimal::ZERO => self.cfg.max_notional / price,
+                Action::Sell => position_qty,
+                _ => Decimal::ZERO,
+            };
+            self.append(
+                symbol,
+                ts,
+                "decision",
+                &decision_id,
+                &json!({"rule": sig.rating, "score": sig.score, "rsi": sig.rsi}),
+            )
+            .await;
+            let guarded = guards::apply(
+                decision,
+                position_qty,
+                buying_power,
+                price,
+                &GuardConfig {
+                    max_notional: self.cfg.max_notional,
+                },
+            );
+            self.append(symbol, ts, "guard", &decision_id, &guard_payload(&guarded))
+                .await;
+            return self.execute(symbol, ts, &decision_id, guarded).await;
+        }
+
         // 3. analyst agent.
         let analysis = self
             .analyst
@@ -151,7 +192,11 @@ impl<B: BarSource, L: LlmClient, S: Store, K: Broker> Pipeline<B, L, S, K> {
         // transcript so far; every turn is a `debate` WAL step so the frontend can show
         // it. Empty when debate_rounds == 0 ⇒ the trader prompt is unchanged.
         let mut debate = String::new();
-        for _round in 0..self.cfg.debate_rounds {
+        let rounds = match self.cfg.arm {
+            Arm::LlmDebate => self.cfg.debate_rounds,
+            Arm::Rule | Arm::Llm => 0,
+        };
+        for _round in 0..rounds {
             for r in &self.researchers {
                 let turn = r.argue(&self.llm, symbol, &analysis, &sig, &debate).await?;
                 self.append(
@@ -281,6 +326,31 @@ fn hold(symbol: &Symbol, why: &str) -> Decision {
         qty: Decimal::ZERO,
         score: 0.0,
         reason: why.to_string(),
+    }
+}
+
+/// The control arm's whole decision function: rating → action. The quantity is a
+/// placeholder; the pipeline sizes it (one `max_notional` clip for a buy, the whole
+/// position for a sell) and the guards clamp it to buying power.
+pub fn rule_decision(symbol: &Symbol, sig: &Signal) -> Decision {
+    let action = match sig.rating {
+        Rating::StrongBuy | Rating::Buy => Action::Buy,
+        Rating::Hold => Action::Hold,
+        Rating::Sell | Rating::StrongSell => Action::Sell,
+    };
+    Decision {
+        symbol: symbol.clone(),
+        action,
+        qty: if action == Action::Hold {
+            Decimal::ZERO
+        } else {
+            Decimal::from(1_000_000_000u64)
+        },
+        score: sig.score,
+        reason: format!(
+            "rule {:?}: score {:.3}, RSI {:.1}",
+            sig.rating, sig.score, sig.rsi
+        ),
     }
 }
 
@@ -425,6 +495,7 @@ mod tests {
             broker,
             PipelineConfig {
                 strategy_id: "test".into(),
+                arm: Arm::Llm,
                 bar_window: 60,
                 max_notional: dec!(100),
                 debate_rounds: 0,
@@ -448,6 +519,59 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn rule_arm_never_calls_the_model_and_still_trades_through_guards() {
+        let store = FakeStore::default();
+        let broker = FakeBroker::default();
+        let pipe = Pipeline::new(
+            FakeBars,
+            NeverLlm,
+            store,
+            broker,
+            PipelineConfig {
+                strategy_id: "test".into(),
+                arm: Arm::Rule,
+                bar_window: 60,
+                max_notional: dec!(100),
+                debate_rounds: 1,
+                force_side: None,
+            },
+        );
+        // FakeBars is a steady uptrend → the rule rates it a buy.
+        let d = pipe.run_symbol(&Symbol::from("NVDA")).await.unwrap();
+        assert_eq!(d.action, Action::Buy);
+        assert_eq!(d.qty, dec!(2), "guards size it: 100 notional @ 50");
+        assert!(d.reason.starts_with("rule "), "{}", d.reason);
+        let steps = pipe.store.steps.lock().unwrap();
+        assert!(!steps.iter().any(|s| s == "analyst" || s == "debate"));
+        assert!(steps.iter().any(|s| s == "decision"));
+        let intent = steps.iter().position(|s| s == "order_intent");
+        let result = steps.iter().position(|s| s == "order_result");
+        assert!(intent.is_some() && intent < result);
+    }
+
+    #[test]
+    fn rule_maps_every_rating_to_an_action() {
+        let sym = Symbol::from("X");
+        let sig = |rating| Signal {
+            score: 0.0,
+            rating,
+            rsi: 50.0,
+        };
+        assert_eq!(
+            rule_decision(&sym, &sig(Rating::StrongBuy)).action,
+            Action::Buy
+        );
+        assert_eq!(rule_decision(&sym, &sig(Rating::Buy)).action, Action::Buy);
+        assert_eq!(rule_decision(&sym, &sig(Rating::Hold)).action, Action::Hold);
+        assert_eq!(rule_decision(&sym, &sig(Rating::Sell)).action, Action::Sell);
+        assert_eq!(
+            rule_decision(&sym, &sig(Rating::StrongSell)).action,
+            Action::Sell
+        );
+        assert_eq!(rule_decision(&sym, &sig(Rating::Hold)).qty, Decimal::ZERO);
+    }
+
     // LLM that MUST NOT be called on the forced path — errors if it is.
     struct NeverLlm;
     #[async_trait]
@@ -466,6 +590,7 @@ mod tests {
             FakeBroker::default(),
             PipelineConfig {
                 strategy_id: "test".into(),
+                arm: Arm::Llm,
                 bar_window: 60,
                 max_notional: dec!(100),
                 debate_rounds: 0,
@@ -508,6 +633,7 @@ mod tests {
             FakeBroker::default(),
             PipelineConfig {
                 strategy_id: "test".into(),
+                arm: Arm::LlmDebate,
                 bar_window: 60,
                 max_notional: dec!(100),
                 debate_rounds: 1,

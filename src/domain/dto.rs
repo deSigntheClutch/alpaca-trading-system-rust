@@ -10,6 +10,93 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Which decision path produced a run. `Rule` maps the signal's rating straight to an
+/// action and never calls a model: it is the control arm, free and reproducible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub enum Arm {
+    #[serde(rename = "rule")]
+    Rule,
+    #[serde(rename = "llm")]
+    Llm,
+    #[serde(rename = "llm+debate")]
+    LlmDebate,
+}
+
+impl Arm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Arm::Rule => "rule",
+            Arm::Llm => "llm",
+            Arm::LlmDebate => "llm+debate",
+        }
+    }
+
+    /// LLM calls one decision day costs on this arm, at `debate_rounds` rounds.
+    pub fn calls_per_day(self, debate_rounds: usize) -> usize {
+        match self {
+            Arm::Rule => 0,
+            Arm::Llm => 2,
+            Arm::LlmDebate => 2 + 2 * debate_rounds,
+        }
+    }
+}
+
+impl std::str::FromStr for Arm {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "rule" => Ok(Arm::Rule),
+            "llm" => Ok(Arm::Llm),
+            "llm+debate" | "debate" => Ok(Arm::LlmDebate),
+            other => Err(format!("unknown arm '{other}' (rule | llm | llm+debate)")),
+        }
+    }
+}
+
+impl std::fmt::Display for Arm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Snapshot of everything that produced a result, echoed on every result so two runs
+/// can be compared and attributed to whatever changed between them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct RunConfig {
+    pub arm: Arm,
+    /// Model id for an LLM arm; empty for the rule arm.
+    pub model: String,
+    /// `anthropic` | `bedrock` | empty for the rule arm.
+    pub adapter: String,
+    pub fee_bps: f64,
+    pub slippage_bps: f64,
+    pub starting_cash: f64,
+    /// First and last decision day, `YYYY-MM-DD`.
+    pub window_start: String,
+    pub window_end: String,
+    /// Symbols traded in this run.
+    pub symbols: Vec<String>,
+    /// Read-only symbols that inform the decision but are never traded (#49; empty
+    /// until that lands).
+    pub context_symbols: Vec<String>,
+    /// Commit the binary was built from (`build.rs`), or "unknown".
+    pub git_sha: String,
+    /// Days whose decision failed and were recorded as a Hold.
+    pub error_days: u32,
+}
+
+/// Row in the run history list (`GET /api/backtest/runs`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct RunSummary {
+    pub run_id: String,
+    /// Epoch millis.
+    pub created_at: i64,
+    pub config: RunConfig,
+}
+
 /// One day of a backtest — everything the chart needs for that point: the price
 /// (line + marker y), the signal that drove it, the action taken, running equity
 /// (equity curve), and the LLM's own words (shown when the marker is clicked).
@@ -95,6 +182,9 @@ pub struct Metrics {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/bindings/")]
 pub struct BacktestResult {
+    /// Shared by every result of the same run.
+    pub run_id: String,
+    pub config: RunConfig,
     pub symbol: String,
     /// Cash the sim started with — baseline for the equity curve.
     pub starting_cash: f64,

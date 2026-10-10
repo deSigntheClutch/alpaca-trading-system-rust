@@ -20,6 +20,7 @@
 //! New port → a new file here (e.g. `fundamentals.rs` for `EarningsCalendar`).
 //! New vendor → a new file under `clients/`.
 
+pub mod backtest_store;
 pub mod bar_store;
 pub mod broker;
 pub mod clients;
@@ -29,10 +30,11 @@ pub mod news;
 pub mod report_store;
 pub mod store;
 
+pub use backtest_store::{BacktestStore, RunRecord};
 pub use bar_store::{Appended, BarFileStore, Meta};
 pub use broker::AlpacaBroker;
 pub use clients::{AlpacaClient, AnthropicClient, BedrockClient, FinnhubClient};
-pub use llm::{Bedrock, Claude, BEDROCK_SONNET, SONNET};
+pub use llm::{Bedrock, Claude, NoLlm, BEDROCK_SONNET, SONNET};
 pub use market::{AlpacaBars, CryptoWs, FileBars, LocalBars};
 pub use news::AlpacaNews;
 pub use report_store::ReportStore;

@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 use std::collections::HashMap;
 
-use crate::domain::dto::{BacktestResult, DayRecord, Metrics};
+use crate::domain::dto::{Arm, BacktestResult, DayRecord, Metrics, RunConfig};
 use crate::domain::error::{BrokerError, MarketError, StoreError};
 use crate::domain::types::{
     Action, Bar, Decision, Order, OrderRequest, Position, Side, Symbol, Timeframe,
@@ -32,6 +32,12 @@ use crate::traits::{BarSource, Broker, LlmClient, Store};
 /// Backtest knobs. `days` caps how many recent bars we actually make decisions on
 /// (each decision day = 2 LLM calls, so this bounds cost).
 pub struct BacktestConfig {
+    /// Which decision function runs each day. `Rule` makes no model calls.
+    pub arm: Arm,
+    /// Labels stamped on the result: model id and adapter name for an LLM arm, empty
+    /// for the rule arm. The sim does not use them; the reader of the result does.
+    pub model: String,
+    pub adapter: String,
     pub starting_cash: f64,
     pub max_notional: Decimal,
     pub days: usize,
@@ -43,6 +49,41 @@ pub struct BacktestConfig {
     /// Fill offset against the trader, in basis points of the fill's reference price:
     /// buys fill that much above the open, sells that much below.
     pub slippage_bps: f64,
+}
+
+/// Identity of one run shared by every symbol in it: the id every result carries and
+/// the symbol lists echoed into `RunConfig`. Build one per run with `RunStamp::new`.
+#[derive(Debug, Clone)]
+pub struct RunStamp {
+    pub run_id: String,
+    pub symbols: Vec<String>,
+    pub context_symbols: Vec<String>,
+}
+
+impl RunStamp {
+    pub fn new(symbols: Vec<String>, context_symbols: Vec<String>) -> Self {
+        Self {
+            run_id: new_run_id(),
+            symbols,
+            context_symbols,
+        }
+    }
+}
+
+/// `run_<UTC timestamp>_<nanos>`: sortable, unique enough for one machine, and
+/// readable in a directory listing. No extra crate for a random id.
+fn new_run_id() -> String {
+    let now = chrono::Utc::now();
+    format!(
+        "run_{}_{:06x}",
+        now.format("%Y%m%dT%H%M%S"),
+        now.timestamp_subsec_nanos() & 0xff_ffff
+    )
+}
+
+/// Commit the binary was built from (`build.rs`), or "unknown".
+pub fn git_sha() -> &'static str {
+    option_env!("GIT_SHA").unwrap_or("unknown")
 }
 
 /// One simulated execution. `reference` is the close the decision was sized on, so
@@ -334,14 +375,29 @@ pub async fn run_backtest<L: LlmClient>(
     symbol: &Symbol,
     bars: Vec<Bar>,
     llm: &L,
-    cfg: BacktestConfig,
+    cfg: &BacktestConfig,
+    stamp: &RunStamp,
 ) -> BacktestResult {
     let len = bars.len();
     let starting_cash = cfg.starting_cash;
+    let config = |window: Option<(i64, i64)>, error_days: u32| RunConfig {
+        arm: cfg.arm,
+        model: cfg.model.clone(),
+        adapter: cfg.adapter.clone(),
+        fee_bps: cfg.fee_bps,
+        slippage_bps: cfg.slippage_bps,
+        starting_cash,
+        window_start: window.map(|w| day_string(w.0)).unwrap_or_default(),
+        window_end: window.map(|w| day_string(w.1)).unwrap_or_default(),
+        symbols: stamp.symbols.clone(),
+        context_symbols: stamp.context_symbols.clone(),
+        git_sha: git_sha().to_string(),
+        error_days,
+    };
 
     // signals::compute needs ≥20 bars; without that, no lookahead-free decision exists.
     if len < 20 {
-        return empty_result(symbol, starting_cash);
+        return empty_result(symbol, starting_cash, &stamp.run_id, config(None, 0));
     }
 
     let sim = SimMarket::new(bars, starting_cash, cfg.fee_bps, cfg.slippage_bps);
@@ -354,6 +410,7 @@ pub async fn run_backtest<L: LlmClient>(
     let mut equity_curve = Vec::new();
     let mut exposure = Vec::new();
     let mut reasons: HashMap<i64, String> = HashMap::new();
+    let mut error_days = 0u32;
 
     for cursor in start..len {
         sim.set_cursor(cursor);
@@ -365,6 +422,7 @@ pub async fn run_backtest<L: LlmClient>(
             &sim,
             PipelineConfig {
                 strategy_id: "backtest".into(),
+                arm: cfg.arm,
                 bar_window: 60,
                 max_notional: cfg.max_notional,
                 debate_rounds: cfg.debate_rounds,
@@ -375,6 +433,7 @@ pub async fn run_backtest<L: LlmClient>(
             Ok(d) => d,
             Err(e) => {
                 tracing::warn!(error = %e, cursor, "backtest day failed → recorded as Hold");
+                error_days += 1;
                 Decision {
                     symbol: symbol.clone(),
                     action: Action::Hold,
@@ -440,6 +499,8 @@ pub async fn run_backtest<L: LlmClient>(
     );
 
     BacktestResult {
+        run_id: stamp.run_id.clone(),
+        config: config(Some((sim.ts(start), sim.ts(len - 1))), error_days),
         symbol: symbol.to_string(),
         starting_cash,
         days,
@@ -448,8 +509,38 @@ pub async fn run_backtest<L: LlmClient>(
     }
 }
 
-fn empty_result(symbol: &Symbol, starting_cash: f64) -> BacktestResult {
+/// Run every symbol of `stamp` from `bars_src` under one `run_id`: `cfg.days`
+/// decision days plus the signal's warm-up. One result per symbol, in order.
+pub async fn run_many<B: BarSource, L: LlmClient>(
+    bars_src: &B,
+    llm: &L,
+    cfg: &BacktestConfig,
+    stamp: &RunStamp,
+) -> Result<Vec<BacktestResult>, MarketError> {
+    let mut out = Vec::with_capacity(stamp.symbols.len());
+    for sym in &stamp.symbols {
+        let symbol = Symbol::from(sym.as_str());
+        let bars = bars_src.daily_bars(&symbol, cfg.days + 20).await?;
+        out.push(run_backtest(&symbol, bars, llm, cfg, stamp).await);
+    }
+    Ok(out)
+}
+
+fn day_string(ts_millis: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ts_millis)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+fn empty_result(
+    symbol: &Symbol,
+    starting_cash: f64,
+    run_id: &str,
+    config: RunConfig,
+) -> BacktestResult {
     BacktestResult {
+        run_id: run_id.to_string(),
+        config,
         symbol: symbol.to_string(),
         starting_cash,
         days: vec![],
@@ -519,6 +610,38 @@ mod tests {
             side,
             client_order_id: "t".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn rule_arm_runs_with_no_llm_and_counts_error_days_as_zero() {
+        use crate::infra::NoLlm;
+        let cfg = BacktestConfig {
+            arm: Arm::Rule,
+            model: String::new(),
+            adapter: String::new(),
+            starting_cash: 10_000.0,
+            max_notional: dec!(1000),
+            days: 10,
+            debate_rounds: 1,
+            fee_bps: 0.0,
+            slippage_bps: 0.0,
+        };
+        let stamp = RunStamp::new(vec!["BTC/USD".into()], vec![]);
+        let result = run_backtest(
+            &Symbol::from("BTC/USD"),
+            rising_bars(40),
+            &NoLlm,
+            &cfg,
+            &stamp,
+        )
+        .await;
+        assert_eq!(result.days.len(), 10);
+        assert_eq!(result.config.error_days, 0, "NoLlm was never called");
+        assert!(result.days.iter().all(|d| d.analyst_text.is_empty()));
+        assert!(
+            result.days.iter().any(|d| d.action == "Buy"),
+            "uptrend → the rule buys"
+        );
     }
 
     #[tokio::test]
@@ -635,20 +758,24 @@ mod tests {
     #[tokio::test]
     async fn run_backtest_produces_days_and_finite_metrics() {
         let bars = rising_bars(40);
-        let result = run_backtest(
-            &Symbol::from("BTC/USD"),
-            bars,
-            &FakeLlm,
-            BacktestConfig {
-                starting_cash: 10_000.0,
-                max_notional: dec!(1000),
-                days: 10,
-                debate_rounds: 0,
-                fee_bps: 25.0,
-                slippage_bps: 5.0,
-            },
-        )
-        .await;
+        let cfg = BacktestConfig {
+            arm: Arm::Llm,
+            model: "fake".into(),
+            adapter: "fake".into(),
+            starting_cash: 10_000.0,
+            max_notional: dec!(1000),
+            days: 10,
+            debate_rounds: 0,
+            fee_bps: 25.0,
+            slippage_bps: 5.0,
+        };
+        let stamp = RunStamp::new(vec!["BTC/USD".into()], vec![]);
+        let result = run_backtest(&Symbol::from("BTC/USD"), bars, &FakeLlm, &cfg, &stamp).await;
+        assert_eq!(result.run_id, stamp.run_id);
+        assert_eq!(result.config.arm, Arm::Llm);
+        assert_eq!(result.config.error_days, 0);
+        assert_eq!(result.config.symbols, ["BTC/USD"]);
+        assert!(!result.config.window_start.is_empty() && !result.config.git_sha.is_empty());
 
         assert_eq!(
             result.days.len(),
