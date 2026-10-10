@@ -27,7 +27,8 @@ pub struct DayRecord {
     pub action: String,
     /// Filled qty in base asset (0 for Hold).
     pub qty: f64,
-    /// Portfolio value (cash + position·close) AFTER this day's fill — equity curve.
+    /// Portfolio value (cash + position·close) at this day's close — the equity curve.
+    /// An order decided today fills at the next open, so it shows up tomorrow.
     pub equity: f64,
     /// The decision agent's `reason`.
     pub decision_reason: String,

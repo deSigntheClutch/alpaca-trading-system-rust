@@ -27,7 +27,8 @@ action: string,
  */
 qty: number, 
 /**
- * Portfolio value (cash + position·close) AFTER this day's fill — equity curve.
+ * Portfolio value (cash + position·close) at this day's close — the equity curve.
+ * An order decided today fills at the next open, so it shows up tomorrow.
  */
 equity: number, 
 /**
