@@ -1,12 +1,10 @@
 /**
  * The only place the SPA talks to the outside world.
  *
- * Today it serves synthetic results, because the Rust endpoints do not exist yet
- * (BT-7 #50). The real path is written out in full below, so when the backend
- * lands the switch is one environment variable and this file stops being
- * interesting:
+ * By default it calls the run API (#50). Synthetic results are still available for
+ * working on the page with no backend at all:
  *
- *     NEXT_PUBLIC_USE_FIXTURES=false npm run dev
+ *     NEXT_PUBLIC_USE_FIXTURES=true npm run dev
  *
  * The real flow is asynchronous on purpose. The rule arm answers in
  * milliseconds, but an LLM arm runs for minutes, so a run is started, polled,
@@ -19,7 +17,14 @@ import type { BacktestResult, RunRequest, RunStatus, RunSummary } from './types'
 
 // `NEXT_PUBLIC_` is Next's rule for env vars that may reach the browser; it is
 // inlined at build time, so a static export bakes the choice in.
-const USE_FIXTURES = process.env.NEXT_PUBLIC_USE_FIXTURES !== 'false'
+const USE_FIXTURES = process.env.NEXT_PUBLIC_USE_FIXTURES === 'true'
+
+/**
+ * Above this many estimated LLM calls the server refuses a run unless the request
+ * says `confirm: true`; mirror it here so the user is asked before, not after.
+ * Keep in step with `LLM_CALL_LIMIT` on the web server (default 200).
+ */
+const LLM_CONFIRM_ABOVE = 200
 
 /** Rough LLM call count for a request, mirroring the estimate BT-7 enforces. */
 export function estimateLlmCalls(req: RunRequest): number {
@@ -58,11 +63,19 @@ export async function runBacktest(
     return out
   }
 
+  const estimate = estimateLlmCalls(req)
+  let confirm = false
+  if (estimate > LLM_CONFIRM_ABOVE) {
+    if (typeof window !== 'undefined' && !window.confirm(`This run makes about ${estimate} LLM calls. Continue?`)) {
+      throw new Error('run cancelled')
+    }
+    confirm = true
+  }
   const started = await json<{ run_id: string }>(
     await fetch('/api/backtest/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+      body: JSON.stringify({ ...req, confirm }),
     }),
   )
 

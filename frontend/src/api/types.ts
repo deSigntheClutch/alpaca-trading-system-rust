@@ -32,6 +32,8 @@ export interface RunRequest {
   arm: Arm
   fee_bps: number
   slippage_bps: number
+  /** Accept an LLM call estimate above the server's limit. Set by the client. */
+  confirm?: boolean
 }
 
 /**
