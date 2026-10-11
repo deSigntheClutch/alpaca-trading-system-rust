@@ -7,9 +7,11 @@
 //! the same price series share state) + a `CollectingStore` that captures the score,
 //! RSI and analyst text each day so the frontend can show WHY the LLM chose as it did.
 //!
-//! ponytail: close-to-close fills, no slippage/fees — an optimistic upper bound. Add a
-//! fill model when the numbers need to be trusted for real capital. f64 sim money
-//! (not `Decimal`): rounding is immaterial to a paper what-if, and it stays simple.
+//! Fill model (#12): an order decided on day t fills at day t+1's **open**, moved
+//! against the trader by `slippage_bps`, and pays `fee_bps` of notional per side. The
+//! decision only ever sees prices through the close it was made on, so a backtest
+//! cannot trade at a price it learned at that same close. f64 sim money (not
+//! `Decimal`): rounding is immaterial to a paper what-if, and it stays simple.
 
 use async_trait::async_trait;
 use rust_decimal::prelude::ToPrimitive;
@@ -33,29 +35,124 @@ pub struct BacktestConfig {
     /// Bull/bear debate rounds per decision day (0 = skip). Mirrors the live pipeline so
     /// a backtested edge uses the same decision chain; adds 2 LLM calls/round/day to cost.
     pub debate_rounds: usize,
+    /// Commission per side, in basis points of notional (25 = 0.25% of each fill).
+    pub fee_bps: f64,
+    /// Fill offset against the trader, in basis points of the fill's reference price:
+    /// buys fill that much above the open, sells that much below.
+    pub slippage_bps: f64,
+}
+
+/// One simulated execution. `reference` is the close the decision was sized on, so
+/// slippage versus the decision price (`price / reference - 1`) is on record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fill {
+    /// Bar the fill happened on (epoch millis).
+    pub ts: i64,
+    pub side: Side,
+    pub qty: f64,
+    pub price: f64,
+    pub fee: f64,
+    pub reference: f64,
+}
+
+/// An order accepted on day t, waiting for day t+1's open.
+#[derive(Debug, Clone)]
+struct Pending {
+    side: Side,
+    qty: f64,
+    reference: f64,
 }
 
 /// Historical price series + a virtual account, exposing both `BarSource` (what the
-/// pipeline may see today) and `Broker` (fills at today's close). Interior mutability
-/// because the ports take `&self` and one `&sim` backs both roles in `Pipeline::new`.
+/// pipeline may see today) and `Broker` (orders fill at the next open). Interior
+/// mutability because the ports take `&self` and one `&sim` backs both roles in
+/// `Pipeline::new`.
 struct SimMarket {
     bars: Vec<Bar>,
     cursor: Mutex<usize>, // "today" index; daily_bars never returns bars after it
     cash: Mutex<f64>,
     position: Mutex<f64>,
+    fee_bps: f64,
+    slippage_bps: f64,
+    /// The order placed today, filled when the cursor moves to tomorrow.
+    pending: Mutex<Option<Pending>>,
+    fills: Mutex<Vec<Fill>>,
+    fees_paid: Mutex<f64>,
 }
 
 impl SimMarket {
-    fn new(bars: Vec<Bar>, starting_cash: f64) -> Self {
+    fn new(bars: Vec<Bar>, starting_cash: f64, fee_bps: f64, slippage_bps: f64) -> Self {
         Self {
             bars,
             cursor: Mutex::new(0),
             cash: Mutex::new(starting_cash),
             position: Mutex::new(0.0),
+            fee_bps,
+            slippage_bps,
+            pending: Mutex::new(None),
+            fills: Mutex::new(Vec::new()),
+            fees_paid: Mutex::new(0.0),
         }
     }
+
+    /// Move "today" to bar `i`. Whatever was ordered on the previous day fills first,
+    /// at bar `i`'s open, so the fill is the first thing the new day sees.
     fn set_cursor(&self, i: usize) {
+        if let Some(p) = self.pending.lock().unwrap().take() {
+            self.fill(p, i, self.bars[i].open);
+        }
         *self.cursor.lock().unwrap() = i;
+    }
+
+    /// Execute `p` on bar `i` at `base` (an open, or the last day's close), with
+    /// slippage against the trader and the per-side fee. A buy that no longer fits
+    /// the cash at that price is cut down to what the cash buys; a sell never
+    /// exceeds the position. Nothing is ever filled at a price the decision saw.
+    fn fill(&self, p: Pending, i: usize, base: f64) {
+        let slip = self.slippage_bps / 10_000.0;
+        let fee_rate = self.fee_bps / 10_000.0;
+        let mut cash = self.cash.lock().unwrap();
+        let mut pos = self.position.lock().unwrap();
+        let (qty, price) = match p.side {
+            Side::Buy => {
+                let price = base * (1.0 + slip);
+                let affordable = (*cash / (price * (1.0 + fee_rate))).max(0.0);
+                (p.qty.min(affordable), price)
+            }
+            Side::Sell => (p.qty.min(*pos), base * (1.0 - slip)),
+        };
+        if qty <= 0.0 {
+            return;
+        }
+        let fee = qty * price * fee_rate;
+        match p.side {
+            Side::Buy => {
+                *cash -= qty * price + fee;
+                *pos += qty;
+            }
+            Side::Sell => {
+                *cash += qty * price - fee;
+                *pos -= qty;
+            }
+        }
+        *self.fees_paid.lock().unwrap() += fee;
+        self.fills.lock().unwrap().push(Fill {
+            ts: self.bars[i].ts,
+            side: p.side,
+            qty,
+            price,
+            fee,
+            reference: p.reference,
+        });
+    }
+
+    fn fees_paid(&self) -> f64 {
+        *self.fees_paid.lock().unwrap()
+    }
+
+    #[allow(dead_code)] // the trade ledger (#11) reads these
+    fn fills(&self) -> Vec<Fill> {
+        self.fills.lock().unwrap().clone()
     }
     fn cursor(&self) -> usize {
         *self.cursor.lock().unwrap()
@@ -127,29 +224,29 @@ impl Broker for SimMarket {
         }])
     }
 
+    /// Accept the order for the next session. The decision was sized on today's
+    /// close; the fill waits for tomorrow's open (see `set_cursor`). On the very last
+    /// bar there is no tomorrow, so the order fills at that close — still a price the
+    /// decision already knew, so no lookahead.
     async fn submit_order(&self, req: &OrderRequest) -> Result<Order, BrokerError> {
-        // Fill at today's close, instantly, in full. (ponytail: no slippage/fees.)
-        let close = self.close(self.cursor());
-        let qty = req.qty.to_f64().unwrap_or(0.0);
-        {
-            let mut cash = self.cash.lock().unwrap();
-            let mut pos = self.position.lock().unwrap();
-            match req.side {
-                Side::Buy => {
-                    *cash -= qty * close;
-                    *pos += qty;
-                }
-                Side::Sell => {
-                    *cash += qty * close;
-                    *pos -= qty;
-                }
-            }
-        }
+        let cursor = self.cursor();
+        let pending = Pending {
+            side: req.side,
+            qty: req.qty.to_f64().unwrap_or(0.0),
+            reference: self.close(cursor),
+        };
+        let status = if cursor + 1 < self.bars.len() {
+            *self.pending.lock().unwrap() = Some(pending);
+            "accepted"
+        } else {
+            self.fill(pending, cursor, self.close(cursor));
+            "filled"
+        };
         Ok(Order {
-            id: format!("sim-{}", self.cursor()),
+            id: format!("sim-{cursor}"),
             client_order_id: req.client_order_id.clone(),
             symbol: req.symbol.clone(),
-            status: "filled".into(),
+            status: status.into(),
         })
     }
 }
@@ -240,7 +337,7 @@ pub async fn run_backtest<L: LlmClient>(
         return empty_result(symbol, starting_cash);
     }
 
-    let sim = SimMarket::new(bars, starting_cash);
+    let sim = SimMarket::new(bars, starting_cash, cfg.fee_bps, cfg.slippage_bps);
     // First decision day: `days` back from the end, but never before we have 20 bars.
     let start = len.saturating_sub(cfg.days).max(19);
     let first_close = sim.close(start);
@@ -300,6 +397,7 @@ pub async fn run_backtest<L: LlmClient>(
         });
     }
 
+    tracing::info!(symbol = %symbol, fees = sim.fees_paid(), fills = sim.fills().len(), "backtest fills");
     let final_equity = *equity_curve.last().unwrap_or(&starting_cash);
     let total_return = if starting_cash > 0.0 {
         (final_equity - starting_cash) / starting_cash
@@ -376,6 +474,117 @@ mod tests {
             .collect()
     }
 
+    /// Bars whose open differs from the previous close, so "next open" is distinguishable
+    /// from "this close": close = 100 + i, next open = close + 1.
+    fn gapping_bars(n: usize) -> Vec<Bar> {
+        (0..n)
+            .map(|i| {
+                let close = 100.0 + i as f64;
+                Bar {
+                    symbol: Symbol::from("NVDA"),
+                    ts: i as i64 * 86_400_000,
+                    open: close - 1.0 + 2.0, // previous close + 2 → a visible gap
+                    high: close + 2.0,
+                    low: close - 2.0,
+                    close,
+                    volume: 1.0,
+                }
+            })
+            .collect()
+    }
+
+    fn order(side: Side, qty: f64) -> OrderRequest {
+        OrderRequest {
+            symbol: Symbol::from("NVDA"),
+            qty: Decimal::from_f64_retain(qty).unwrap(),
+            side,
+            client_order_id: "t".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn order_fills_at_next_open_with_slippage_and_fee() {
+        let bars = gapping_bars(5);
+        let sim = SimMarket::new(bars.clone(), 10_000.0, 100.0, 50.0); // 1% fee, 0.5% slip
+        sim.set_cursor(2);
+        let o = sim.submit_order(&order(Side::Buy, 10.0)).await.unwrap();
+        assert_eq!(o.status, "accepted", "nothing fills on the decision day");
+        assert_eq!(sim.position(), 0.0);
+        assert_eq!(sim.cash(), 10_000.0);
+
+        sim.set_cursor(3);
+        let fills = sim.fills();
+        assert_eq!(fills.len(), 1);
+        let f = &fills[0];
+        let expect_price = bars[3].open * 1.005;
+        assert!(
+            (f.price - expect_price).abs() < 1e-9,
+            "buy fills at next open + slippage"
+        );
+        assert_eq!(
+            f.reference, bars[2].close,
+            "reference is the close the decision saw"
+        );
+        assert!((f.fee - 10.0 * expect_price * 0.01).abs() < 1e-9);
+        assert_eq!(sim.position(), 10.0);
+        assert!((sim.cash() - (10_000.0 - 10.0 * expect_price - f.fee)).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn round_trips_cost_exactly_the_fees() {
+        // Flat prices: every open and close is 100, so the only thing that moves
+        // equity over N round trips is 2N fee legs. 1% per side, no slippage.
+        let bars: Vec<Bar> = (0..12)
+            .map(|i| Bar {
+                symbol: Symbol::from("NVDA"),
+                ts: i as i64 * 86_400_000,
+                open: 100.0,
+                high: 100.0,
+                low: 100.0,
+                close: 100.0,
+                volume: 1.0,
+            })
+            .collect();
+        let sim = SimMarket::new(bars, 10_000.0, 100.0, 0.0);
+        let n = 5;
+        for k in 0..n {
+            sim.set_cursor(2 * k);
+            sim.submit_order(&order(Side::Buy, 1.0)).await.unwrap();
+            sim.set_cursor(2 * k + 1);
+            sim.submit_order(&order(Side::Sell, 1.0)).await.unwrap();
+        }
+        sim.set_cursor(2 * n); // fills the last sell
+        assert_eq!(sim.position(), 0.0);
+        let expected_fees = n as f64 * 2.0 * 100.0 * 0.01;
+        assert!((sim.fees_paid() - expected_fees).abs() < 1e-9);
+        assert!((sim.cash() - (10_000.0 - expected_fees)).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn last_day_order_fills_at_that_close() {
+        let bars = gapping_bars(4);
+        let sim = SimMarket::new(bars.clone(), 10_000.0, 0.0, 0.0);
+        sim.set_cursor(3);
+        let o = sim.submit_order(&order(Side::Buy, 1.0)).await.unwrap();
+        assert_eq!(o.status, "filled");
+        assert_eq!(sim.fills()[0].price, bars[3].close);
+    }
+
+    #[tokio::test]
+    async fn buy_is_cut_to_what_cash_affords_at_the_open() {
+        let bars = gapping_bars(4);
+        let sim = SimMarket::new(bars.clone(), 1_000.0, 0.0, 0.0);
+        sim.set_cursor(1);
+        sim.submit_order(&order(Side::Buy, 50.0)).await.unwrap(); // 50 × ~103 > 1000
+        sim.set_cursor(2);
+        let f = &sim.fills()[0];
+        assert!(
+            (f.qty * f.price - 1_000.0).abs() < 1e-6,
+            "spent exactly the cash"
+        );
+        assert!(sim.cash().abs() < 1e-6);
+    }
+
     // Analyst call gets prose; decision call (system prompt mentions JSON) gets a BUY.
     struct FakeLlm;
     #[async_trait]
@@ -392,7 +601,7 @@ mod tests {
     #[tokio::test]
     async fn sim_market_never_looks_ahead() {
         let bars = rising_bars(40);
-        let sim = SimMarket::new(bars.clone(), 10_000.0);
+        let sim = SimMarket::new(bars.clone(), 10_000.0, 0.0, 0.0);
         sim.set_cursor(25);
         let got = sim.daily_bars(&Symbol::from("BTC/USD"), 60).await.unwrap();
         // The window ends exactly at "today" and contains nothing after it.
@@ -416,6 +625,8 @@ mod tests {
                 max_notional: dec!(1000),
                 days: 10,
                 debate_rounds: 0,
+                fee_bps: 25.0,
+                slippage_bps: 5.0,
             },
         )
         .await;

@@ -148,6 +148,14 @@ fn debate_rounds() -> usize {
         .unwrap_or(1)
 }
 
+/// A float knob from the environment, or `default` when unset or unparseable.
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
 /// JSON line per symbol to `backtest.jsonl` (for the dashboard). Reuses the live
 /// pipeline via `engine::backtest`; no live orders are placed. `BACKTEST_DAYS`
 /// (default 90) caps how many recent days get a decision — each day = 2 LLM calls.
@@ -164,8 +172,14 @@ async fn run_backtest_all<B: BarSource, L: LlmClient>(
     let out_path = std::env::var("BACKTEST_PATH").unwrap_or_else(|_| "backtest.jsonl".into());
     let fetch = days + 20; // +20-bar warmup for the signal window
 
+    let fee_bps = env_f64("FEE_BPS", 25.0);
+    let slippage_bps = env_f64("SLIPPAGE_BPS", 5.0);
+
     let calls = strat.symbols.len() * days * 2;
     println!("BACKTEST   : {days} days/symbol → {out_path}");
+    println!(
+        "           : fills at next open · fee {fee_bps} bps/side · slippage {slippage_bps} bps"
+    );
     println!("           : ≈ {calls} LLM calls ({} symbols × {days} days × 2 agents) — this costs money\n", strat.symbols.len());
 
     // Fresh file each run (results are a snapshot, not an append-only log).
@@ -187,6 +201,8 @@ async fn run_backtest_all<B: BarSource, L: LlmClient>(
                 max_notional,
                 days,
                 debate_rounds: debate_rounds(),
+                fee_bps,
+                slippage_bps,
             },
         )
         .await;
