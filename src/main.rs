@@ -206,12 +206,18 @@ async fn run_backtest_all<B: BarSource, L: LlmClient>(
             },
         )
         .await;
+        let m = &result.metrics;
         println!(
-            "  {symbol}: {} days · return {:.2}% · {} trades · buy&hold {:.2}%",
+            "  {symbol}: {} days · net {:+.2}% · sharpe {:.2} · maxDD {:.1}% · {} closed trades · win {:.0}% · exposure {:.0}% · fees ${:.2} · buy&hold {:+.2}%",
             result.days.len(),
-            result.total_return * 100.0,
-            result.num_trades,
-            result.buy_hold_return * 100.0,
+            m.total_return * 100.0,
+            m.sharpe,
+            m.max_drawdown * 100.0,
+            m.num_trades,
+            m.win_rate * 100.0,
+            m.exposure * 100.0,
+            m.total_fees,
+            m.buy_hold_return * 100.0,
         );
         writeln!(file, "{}", serde_json::to_string(&result)?)?;
     }

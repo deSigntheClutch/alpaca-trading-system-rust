@@ -36,8 +36,62 @@ pub struct DayRecord {
     pub analyst_text: String,
 }
 
-/// One symbol's backtest: the per-day series plus summary metrics. One of these is
-/// written per line to `backtest.jsonl`.
+/// One lot: a completed or still-open round trip. The only source for "did this
+/// trade make money". Accounting is per lot, FIFO (`engine::metrics::pair_trades`):
+/// every buy marker on the chart maps to exactly one row; a sell that closes three
+/// lots produces three rows sharing an `exit_ts`. An open lot has `exit_* = None`
+/// and a `pnl` marked at the last close.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct Trade {
+    pub symbol: String,
+    pub entry_ts: i64,
+    pub entry_price: f64,
+    pub exit_ts: Option<i64>,
+    pub exit_price: Option<f64>,
+    pub qty: f64,
+    /// Net of fees on both legs.
+    pub pnl: f64,
+    /// `pnl` over the entry notional.
+    pub pnl_pct: f64,
+    pub fees: f64,
+    pub entry_reason: String,
+    pub exit_reason: String,
+}
+
+/// The summary cards. Computed by `engine::metrics::summarize` from the equity curve,
+/// the paired trades and the daily exposure series.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct Metrics {
+    /// Strategy total return as a fraction (0.12 = +12%), net of fees and slippage.
+    pub total_return: f64,
+    /// Worst peak-to-trough drop as a positive fraction (0.30 = -30% drawdown).
+    pub max_drawdown: f64,
+    /// Annualised, from daily equity returns, risk-free rate zero; 0 when undefined.
+    pub sharpe: f64,
+    /// Closed round trips. Open lots are listed in `trades` but not counted.
+    pub num_trades: u32,
+    /// Closed trades with positive net P&L over closed trades; 0 when none closed.
+    pub win_rate: f64,
+    /// Mean net P&L of winning closed trades (0 when none).
+    pub avg_win: f64,
+    /// Mean net P&L of losing closed trades, a negative number (0 when none).
+    pub avg_loss: f64,
+    /// Gross wins over gross losses. `None` when there are no losing trades, which
+    /// would otherwise be infinity — and serde writes non-finite floats as null anyway.
+    pub profit_factor: Option<f64>,
+    /// Average share of equity held as position over the window, so the strategy and
+    /// a fully-invested buy-and-hold benchmark become comparable.
+    pub exposure: f64,
+    /// Buy-and-hold return over the same window — the benchmark to beat.
+    pub buy_hold_return: f64,
+    /// Fees paid over the window, in cash.
+    pub total_fees: f64,
+}
+
+/// One symbol's backtest: the per-day series, the trade ledger and the summary. One
+/// of these is written per line to `backtest.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/bindings/")]
 pub struct BacktestResult {
@@ -45,13 +99,8 @@ pub struct BacktestResult {
     /// Cash the sim started with — baseline for the equity curve.
     pub starting_cash: f64,
     pub days: Vec<DayRecord>,
-    /// Strategy total return as a fraction (0.12 = +12%).
-    pub total_return: f64,
-    /// Worst peak-to-trough drop as a positive fraction (0.30 = -30% drawdown).
-    pub max_drawdown: f64,
-    pub num_trades: u32,
-    /// Buy-and-hold return over the same window — the benchmark to beat.
-    pub buy_hold_return: f64,
+    pub trades: Vec<Trade>,
+    pub metrics: Metrics,
 }
 
 /// One row of the live/paper event trail (`events.jsonl`), served as-is to the events

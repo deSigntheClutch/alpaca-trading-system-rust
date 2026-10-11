@@ -18,11 +18,14 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::sync::Mutex;
 
-use crate::domain::dto::{BacktestResult, DayRecord};
+use std::collections::HashMap;
+
+use crate::domain::dto::{BacktestResult, DayRecord, Metrics};
 use crate::domain::error::{BrokerError, MarketError, StoreError};
 use crate::domain::types::{
     Action, Bar, Decision, Order, OrderRequest, Position, Side, Symbol, Timeframe,
 };
+use crate::engine::metrics;
 use crate::engine::pipeline::{Pipeline, PipelineConfig};
 use crate::traits::{BarSource, Broker, LlmClient, Store};
 
@@ -48,6 +51,8 @@ pub struct BacktestConfig {
 pub struct Fill {
     /// Bar the fill happened on (epoch millis).
     pub ts: i64,
+    /// Bar the decision was made on — joins the fill back to its `DayRecord`.
+    pub decided_ts: i64,
     pub side: Side,
     pub qty: f64,
     pub price: f64,
@@ -61,6 +66,7 @@ struct Pending {
     side: Side,
     qty: f64,
     reference: f64,
+    decided_ts: i64,
 }
 
 /// Historical price series + a virtual account, exposing both `BarSource` (what the
@@ -138,6 +144,7 @@ impl SimMarket {
         *self.fees_paid.lock().unwrap() += fee;
         self.fills.lock().unwrap().push(Fill {
             ts: self.bars[i].ts,
+            decided_ts: p.decided_ts,
             side: p.side,
             qty,
             price,
@@ -150,7 +157,6 @@ impl SimMarket {
         *self.fees_paid.lock().unwrap()
     }
 
-    #[allow(dead_code)] // the trade ledger (#11) reads these
     fn fills(&self) -> Vec<Fill> {
         self.fills.lock().unwrap().clone()
     }
@@ -234,6 +240,7 @@ impl Broker for SimMarket {
             side: req.side,
             qty: req.qty.to_f64().unwrap_or(0.0),
             reference: self.close(cursor),
+            decided_ts: self.ts(cursor),
         };
         let status = if cursor + 1 < self.bars.len() {
             *self.pending.lock().unwrap() = Some(pending);
@@ -345,7 +352,8 @@ pub async fn run_backtest<L: LlmClient>(
 
     let mut days = Vec::new();
     let mut equity_curve = Vec::new();
-    let mut num_trades = 0u32;
+    let mut exposure = Vec::new();
+    let mut reasons: HashMap<i64, String> = HashMap::new();
 
     for cursor in start..len {
         sim.set_cursor(cursor);
@@ -381,9 +389,14 @@ pub async fn run_backtest<L: LlmClient>(
         let equity = sim.cash() + sim.position() * close;
         let (score, rsi, analyst_text) = store.snapshot();
         if decision.action != Action::Hold {
-            num_trades += 1;
+            reasons.insert(sim.ts(cursor), decision.reason.clone());
         }
         equity_curve.push(equity);
+        exposure.push(if equity > 0.0 {
+            sim.position() * close / equity
+        } else {
+            0.0
+        });
         days.push(DayRecord {
             ts: sim.ts(cursor),
             close,
@@ -397,27 +410,41 @@ pub async fn run_backtest<L: LlmClient>(
         });
     }
 
-    tracing::info!(symbol = %symbol, fees = sim.fees_paid(), fills = sim.fills().len(), "backtest fills");
-    let final_equity = *equity_curve.last().unwrap_or(&starting_cash);
-    let total_return = if starting_cash > 0.0 {
-        (final_equity - starting_cash) / starting_cash
-    } else {
-        0.0
-    };
     let buy_hold_return = if first_close > 0.0 {
         (last_close - first_close) / first_close
     } else {
         0.0
     };
+    let fills = sim.fills();
+    let trades = metrics::pair_trades(
+        symbol.as_str(),
+        &fills,
+        &reasons,
+        sim.ts(len - 1),
+        last_close,
+    );
+    let summary = metrics::summarize(
+        &equity_curve,
+        starting_cash,
+        &trades,
+        &exposure,
+        buy_hold_return,
+        sim.fees_paid(),
+    );
+    tracing::info!(
+        symbol = %symbol,
+        fills = fills.len(),
+        trades = summary.num_trades,
+        fees = summary.total_fees,
+        "backtest done"
+    );
 
     BacktestResult {
         symbol: symbol.to_string(),
         starting_cash,
         days,
-        total_return,
-        max_drawdown: max_drawdown(&equity_curve),
-        num_trades,
-        buy_hold_return,
+        trades,
+        metrics: summary,
     }
 }
 
@@ -426,29 +453,21 @@ fn empty_result(symbol: &Symbol, starting_cash: f64) -> BacktestResult {
         symbol: symbol.to_string(),
         starting_cash,
         days: vec![],
-        total_return: 0.0,
-        max_drawdown: 0.0,
-        num_trades: 0,
-        buy_hold_return: 0.0,
+        trades: vec![],
+        metrics: Metrics {
+            total_return: 0.0,
+            max_drawdown: 0.0,
+            sharpe: 0.0,
+            num_trades: 0,
+            win_rate: 0.0,
+            avg_win: 0.0,
+            avg_loss: 0.0,
+            profit_factor: None,
+            exposure: 0.0,
+            buy_hold_return: 0.0,
+            total_fees: 0.0,
+        },
     }
-}
-
-/// Worst peak-to-trough drop as a positive fraction (0.3 = a 30% drawdown).
-fn max_drawdown(equity: &[f64]) -> f64 {
-    let mut peak = f64::MIN;
-    let mut max_dd = 0.0;
-    for &e in equity {
-        if e > peak {
-            peak = e;
-        }
-        if peak > 0.0 {
-            let dd = (peak - e) / peak;
-            if dd > max_dd {
-                max_dd = dd;
-            }
-        }
-    }
-    max_dd
 }
 
 #[cfg(test)]
@@ -636,12 +655,12 @@ mod tests {
             10,
             "10 decision days over the last 10 bars"
         );
-        assert!(result.total_return.is_finite());
-        assert!(result.max_drawdown.is_finite() && result.max_drawdown >= 0.0);
-        assert!(
-            result.num_trades >= 1,
-            "FakeLlm always buys → trades happen"
-        );
+        let m = &result.metrics;
+        assert!(m.total_return.is_finite());
+        assert!(m.max_drawdown.is_finite() && m.max_drawdown >= 0.0);
+        assert!(!result.trades.is_empty(), "FakeLlm always buys → lots open");
+        assert!(m.total_fees > 0.0, "25 bps fees are charged");
+        assert!(m.exposure > 0.0 && m.exposure <= 1.0);
         // Every recorded day used a real bar (no fabricated prices) and carried the
         // captured signal + analyst text the frontend needs.
         assert!(result
