@@ -8,7 +8,7 @@ use anyhow::Context as _;
 use alpaca_trading_system::domain::config::{Config, Strategy};
 use alpaca_trading_system::domain::dto::Arm;
 use alpaca_trading_system::domain::types::{Side, Symbol};
-use alpaca_trading_system::engine::backtest::{self, BacktestConfig, RunStamp};
+use alpaca_trading_system::engine::backtest::{self, BacktestConfig, RunStamp, Window};
 use alpaca_trading_system::engine::pipeline::{Pipeline, PipelineConfig};
 use alpaca_trading_system::infra::{
     AlpacaBars, AlpacaBroker, AlpacaClient, AnthropicClient, BacktestStore, BarFileStore, Bedrock,
@@ -265,7 +265,7 @@ async fn run_backtest_all<B: BarSource, L: LlmClient>(
         slippage_bps,
     };
     let stamp = RunStamp::new(strat.symbols.clone(), Vec::new());
-    let results = backtest::run_many(bars_src, llm, &cfg, &stamp)
+    let results = backtest::run_many(bars_src, llm, &cfg, &stamp, Window::Days(days), &|_| {})
         .await
         .context("fetch bars")?;
 

@@ -31,6 +31,7 @@ use crate::traits::{BarSource, Broker, LlmClient, Store};
 
 /// Backtest knobs. `days` caps how many recent bars we actually make decisions on
 /// (each decision day = 2 LLM calls, so this bounds cost).
+#[derive(Debug, Clone)]
 pub struct BacktestConfig {
     /// Which decision function runs each day. `Rule` makes no model calls.
     pub arm: Arm,
@@ -50,6 +51,18 @@ pub struct BacktestConfig {
     /// buys fill that much above the open, sells that much below.
     pub slippage_bps: f64,
 }
+
+/// Which bars a run decides on: the most recent `Days`, or every session inside an
+/// explicit range (epoch millis, `end` exclusive). The signal's warm-up bars are
+/// fetched on top in either case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Window {
+    Days(usize),
+    Range { start: i64, end: i64 },
+}
+
+/// Fraction of a run that is done, in `[0, 1]`, reported after every decision day.
+pub type Progress<'a> = &'a (dyn Fn(f64) + Send + Sync);
 
 /// Identity of one run shared by every symbol in it: the id every result carries and
 /// the symbol lists echoed into `RunConfig`. Build one per run with `RunStamp::new`.
@@ -377,6 +390,7 @@ pub async fn run_backtest<L: LlmClient>(
     llm: &L,
     cfg: &BacktestConfig,
     stamp: &RunStamp,
+    progress: Progress<'_>,
 ) -> BacktestResult {
     let len = bars.len();
     let starting_cash = cfg.starting_cash;
@@ -444,6 +458,8 @@ pub async fn run_backtest<L: LlmClient>(
             }
         };
 
+        progress((cursor - start + 1) as f64 / (len - start) as f64);
+
         let close = sim.close(cursor);
         let equity = sim.cash() + sim.position() * close;
         let (score, rsi, analyst_text) = store.snapshot();
@@ -509,19 +525,53 @@ pub async fn run_backtest<L: LlmClient>(
     }
 }
 
-/// Run every symbol of `stamp` from `bars_src` under one `run_id`: `cfg.days`
-/// decision days plus the signal's warm-up. One result per symbol, in order.
+/// Calendar days fetched before a range's `start` so the signal has its 20-session
+/// warm-up: 20 sessions is four weeks, plus holidays and slack.
+const WARMUP_MS: i64 = 45 * 86_400_000;
+
+/// Run every symbol of `stamp` from `bars_src` under one `run_id`, deciding on the
+/// bars `window` selects plus the signal's warm-up. One result per symbol, in order;
+/// `progress` is called with the whole run's fraction done.
 pub async fn run_many<B: BarSource, L: LlmClient>(
     bars_src: &B,
     llm: &L,
     cfg: &BacktestConfig,
     stamp: &RunStamp,
+    window: Window,
+    progress: Progress<'_>,
 ) -> Result<Vec<BacktestResult>, MarketError> {
+    let n = stamp.symbols.len().max(1) as f64;
     let mut out = Vec::with_capacity(stamp.symbols.len());
-    for sym in &stamp.symbols {
+    for (i, sym) in stamp.symbols.iter().enumerate() {
         let symbol = Symbol::from(sym.as_str());
-        let bars = bars_src.daily_bars(&symbol, cfg.days + 20).await?;
-        out.push(run_backtest(&symbol, bars, llm, cfg, stamp).await);
+        let (bars, cfg) = match window {
+            Window::Days(days) => {
+                let bars = bars_src.daily_bars(&symbol, days + 20).await?;
+                (
+                    bars,
+                    BacktestConfig {
+                        days,
+                        ..cfg.clone()
+                    },
+                )
+            }
+            Window::Range { start, end } => {
+                let bars = bars_src
+                    .bars_range(&symbol, Timeframe::Day1, start - WARMUP_MS, end)
+                    .await?;
+                // Decide on every session inside the range; earlier bars are warm-up.
+                let days = bars.iter().filter(|b| b.ts >= start).count();
+                (
+                    bars,
+                    BacktestConfig {
+                        days,
+                        ..cfg.clone()
+                    },
+                )
+            }
+        };
+        let per_symbol = |f: f64| progress((i as f64 + f) / n);
+        out.push(run_backtest(&symbol, bars, llm, &cfg, stamp, &per_symbol).await);
     }
     Ok(out)
 }
@@ -633,6 +683,7 @@ mod tests {
             &NoLlm,
             &cfg,
             &stamp,
+            &|_| {},
         )
         .await;
         assert_eq!(result.days.len(), 10);
@@ -642,6 +693,94 @@ mod tests {
             result.days.iter().any(|d| d.action == "Buy"),
             "uptrend → the rule buys"
         );
+    }
+
+    /// Serves `rising_bars(60)` through the port, so `run_many` can be driven with
+    /// both window kinds.
+    struct FakeBars;
+    #[async_trait]
+    impl BarSource for FakeBars {
+        async fn bars(
+            &self,
+            _symbol: &Symbol,
+            _timeframe: Timeframe,
+            limit: usize,
+        ) -> Result<Vec<Bar>, MarketError> {
+            let all = rising_bars(60);
+            Ok(all[all.len().saturating_sub(limit)..].to_vec())
+        }
+        async fn bars_range(
+            &self,
+            _symbol: &Symbol,
+            _timeframe: Timeframe,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<Bar>, MarketError> {
+            Ok(rising_bars(60)
+                .into_iter()
+                .filter(|b| b.ts >= start && b.ts < end)
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_many_decides_on_the_window_and_reports_progress() {
+        use crate::infra::NoLlm;
+        use std::sync::Mutex;
+        let cfg = BacktestConfig {
+            arm: Arm::Rule,
+            model: String::new(),
+            adapter: String::new(),
+            starting_cash: 10_000.0,
+            max_notional: dec!(1000),
+            days: 0,
+            debate_rounds: 0,
+            fee_bps: 0.0,
+            slippage_bps: 0.0,
+        };
+        let stamp = RunStamp::new(vec!["A".into(), "B".into()], vec![]);
+        let seen = Mutex::new(Vec::new());
+        let progress = |f: f64| seen.lock().unwrap().push(f);
+
+        // Trailing window: 10 decision days per symbol.
+        let out = run_many(&FakeBars, &NoLlm, &cfg, &stamp, Window::Days(10), &progress)
+            .await
+            .unwrap();
+        assert_eq!(
+            out.iter().map(|r| r.days.len()).collect::<Vec<_>>(),
+            [10, 10]
+        );
+        let seen_days = seen.lock().unwrap().clone();
+        assert_eq!(
+            seen_days.len(),
+            20,
+            "one report per decision day across both symbols"
+        );
+        assert!(seen_days.windows(2).all(|w| w[0] <= w[1]), "monotone");
+        assert!(
+            (seen_days.last().unwrap() - 1.0).abs() < 1e-9,
+            "ends at 1.0"
+        );
+        assert!(seen_days[9] <= 0.5 + 1e-9, "first symbol finishes at half");
+
+        // Explicit range: bars 30..40 (ts = i days) → 10 decision days, warm-up before.
+        let day = 86_400_000;
+        let out = run_many(
+            &FakeBars,
+            &NoLlm,
+            &cfg,
+            &stamp,
+            Window::Range {
+                start: 30 * day,
+                end: 40 * day,
+            },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+        let days: Vec<i64> = out[0].days.iter().map(|d| d.ts / day).collect();
+        assert_eq!(days, (30..40).collect::<Vec<_>>());
+        assert_eq!(out[0].config.window_start, "1970-01-31");
     }
 
     #[tokio::test]
@@ -770,7 +909,15 @@ mod tests {
             slippage_bps: 5.0,
         };
         let stamp = RunStamp::new(vec!["BTC/USD".into()], vec![]);
-        let result = run_backtest(&Symbol::from("BTC/USD"), bars, &FakeLlm, &cfg, &stamp).await;
+        let result = run_backtest(
+            &Symbol::from("BTC/USD"),
+            bars,
+            &FakeLlm,
+            &cfg,
+            &stamp,
+            &|_| {},
+        )
+        .await;
         assert_eq!(result.run_id, stamp.run_id);
         assert_eq!(result.config.arm, Arm::Llm);
         assert_eq!(result.config.error_days, 0);

@@ -89,8 +89,8 @@ export function App() {
           <strong>These prices are invented, not market data.</strong> The browser makes no network
           request at all: the series is a random walk seeded from the letters of the ticker, indexed to
           100 at the start of the window. A real symbol will not show its real price, and the returns
-          here mean nothing. This exists so the page can be built before the bar endpoints (#30, #52)
-          and the run API (#50) are written. Set <code>NEXT_PUBLIC_USE_FIXTURES=false</code> once those exist.
+          here mean nothing. This build was made with <code>NEXT_PUBLIC_USE_FIXTURES=true</code>, for
+          working on the page without a backend; a normal build calls the run API.
         </div>
       )}
 

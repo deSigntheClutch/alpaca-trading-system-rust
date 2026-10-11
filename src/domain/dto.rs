@@ -87,6 +87,53 @@ pub struct RunConfig {
     pub error_days: u32,
 }
 
+/// What the page configures and POSTs to `/api/backtest/run`. Either a trailing
+/// `days` window or an explicit `start`/`end` (`YYYY-MM-DD`, end inclusive).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct RunRequest {
+    /// Symbols that are actually traded.
+    pub symbols: Vec<String>,
+    /// Read-only symbols that inform the decision but are never traded (#49).
+    #[serde(default)]
+    pub context_symbols: Vec<String>,
+    #[serde(default)]
+    pub days: Option<usize>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub end: Option<String>,
+    pub starting_cash: f64,
+    pub arm: Arm,
+    pub fee_bps: f64,
+    pub slippage_bps: f64,
+    /// Accept an LLM call estimate above the server's limit. Without it such a run is
+    /// refused with the estimate, so a click cannot spend money by accident.
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+#[serde(rename_all = "lowercase")]
+pub enum RunState {
+    Queued,
+    Running,
+    Done,
+    Error,
+}
+
+/// `GET /api/backtest/runs/{id}/status` — the LLM arm takes minutes, the page polls.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "frontend/src/bindings/")]
+pub struct RunStatus {
+    pub run_id: String,
+    pub state: RunState,
+    /// 0..1, or `None` when the backend cannot estimate.
+    pub progress: Option<f64>,
+    pub message: String,
+}
+
 /// Row in the run history list (`GET /api/backtest/runs`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "frontend/src/bindings/")]
