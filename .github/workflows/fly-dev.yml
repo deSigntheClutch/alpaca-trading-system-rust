@@ -20,10 +20,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - name: Create app if missing
+      - name: Create app and data volume if missing
         run: |
           APP=$(grep '^app = ' fly.toml | cut -d'"' -f2)
           flyctl status --app "$APP" >/dev/null 2>&1 || flyctl apps create "$APP"
+          if [ "$(flyctl volumes list --app "$APP" --json | jq '[.[] | select(.name == "data")] | length')" = 0 ]; then
+            # Machines created before the volume existed cannot have it attached;
+            # they hold nothing worth keeping, so replace them.
+            for id in $(flyctl machines list --app "$APP" --json | jq -r '.[].id'); do
+              flyctl machines destroy "$id" --app "$APP" --force
+            done
+            flyctl volumes create data --app "$APP" --region sjc --size 1 --yes
+          fi
       - name: Forward Alpaca paper keys
         env:
           ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
@@ -35,4 +43,4 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         if: env.ANTHROPIC_API_KEY != ''
         run: flyctl secrets set --stage ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
-      - run: flyctl deploy --remote-only
+      - run: flyctl deploy --remote-only --ha=false
