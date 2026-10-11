@@ -1,0 +1,38 @@
+# Push to `dev` → build and deploy the dashboard to Fly (fly.toml).
+# Needs repo secret FLY_API_TOKEN (an org token, so the first run can create the app).
+# Optional secrets ALPACA_KEY / ALPACA_SECRET (paper) and ANTHROPIC_API_KEY are
+# forwarded: Alpaca for the bar backfill behind the report and backtests, Anthropic
+# for the LLM backtest arm and the report's notes.
+name: fly-dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency: fly-dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Create app if missing
+        run: |
+          APP=$(grep '^app = ' fly.toml | cut -d'"' -f2)
+          flyctl status --app "$APP" >/dev/null 2>&1 || flyctl apps create "$APP"
+      - name: Forward Alpaca paper keys
+        env:
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        if: env.ALPACA_KEY != ''
+        run: flyctl secrets set --stage ALPACA_KEY="$ALPACA_KEY" ALPACA_SECRET="$ALPACA_SECRET"
+      - name: Forward Anthropic key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        if: env.ANTHROPIC_API_KEY != ''
+        run: flyctl secrets set --stage ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+      - run: flyctl deploy --remote-only

@@ -21,9 +21,11 @@
 //! read **as of that morning** against the bar files — the replay behind the page's
 //! date box. `GET /api/reports`, `/api/reports/latest`, `/api/reports/{date}` serve
 //! the written reports. Everything here reads files; nothing fetches.
+//!
+//! Binds 127.0.0.1 unless `HOST` says otherwise; the container sets `HOST=0.0.0.0`.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Mutex;
 
 use axum::extract::{FromRef, Path, Query};
@@ -142,7 +144,11 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let host: IpAddr = std::env::var("HOST")
+        .ok()
+        .and_then(|h| h.parse().ok())
+        .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+    let addr = SocketAddr::from((host, port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "dashboard API listening (read-only)");
     println!(
