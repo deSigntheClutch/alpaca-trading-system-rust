@@ -43,6 +43,20 @@ pub fn cost_usd(model: &str, input_tokens: u64, output_tokens: u64) -> Option<f6
     Some(input_tokens as f64 * i / 1e6 + output_tokens as f64 * o / 1e6)
 }
 
+/// The null adapter: the rule arm never calls a model, and anything that does call
+/// one through this gets a clear error instead of a quiet fake reply. It is also how
+/// the read-only dashboard can run a rule backtest without holding an API key.
+pub struct NoLlm;
+
+#[async_trait]
+impl LlmClient for NoLlm {
+    async fn message(&self, _system: &str, _user: &str) -> Result<String, LlmError> {
+        Err(LlmError::Request(
+            "no LLM configured: this arm must not call a model".into(),
+        ))
+    }
+}
+
 /// Anthropic Messages API direct.
 pub struct Claude {
     client: Arc<AnthropicClient>,

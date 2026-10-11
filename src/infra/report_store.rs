@@ -68,7 +68,7 @@ impl ReportStore {
     }
 }
 
-fn read_opt(path: &Path) -> std::io::Result<Option<MorningReport>> {
+pub(crate) fn read_opt<T: serde::de::DeserializeOwned>(path: &Path) -> std::io::Result<Option<T>> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
@@ -80,7 +80,7 @@ fn read_opt(path: &Path) -> std::io::Result<Option<MorningReport>> {
 
 /// Write to `<path>.tmp` then rename over `path`. Rename is atomic on the same
 /// filesystem, so readers see either the old file or the new one, never a prefix.
-fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)

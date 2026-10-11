@@ -30,15 +30,16 @@ use alpaca_trading_system::domain::types::{Bar, Symbol, Timeframe};
 use alpaca_trading_system::domain::universe::Universe;
 use alpaca_trading_system::engine::regime;
 use alpaca_trading_system::engine::screener::{self, ScreenerConfig};
-use alpaca_trading_system::infra::{BarFileStore, FileBars, ReportStore};
+use alpaca_trading_system::infra::{BacktestStore, BarFileStore, FileBars, ReportStore};
 use axum::http::StatusCode;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-/// Where the two JSON-lines inputs live. v1 reads files the trading runs produce;
-/// swapping to a Scylla read later means changing only these handlers.
+/// Where the inputs live. v1 reads files the trading runs produce; swapping to a
+/// Scylla read later means changing only these handlers.
 #[derive(Clone)]
 struct Paths {
+    /// Directory of run files (`BacktestStore`).
     backtest: String,
     events: String,
     bars: String,
@@ -56,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let paths = Paths {
-        backtest: std::env::var("BACKTEST_PATH").unwrap_or_else(|_| "backtest.jsonl".into()),
+        backtest: std::env::var("BACKTEST_STORE").unwrap_or_else(|_| "data/backtests".into()),
         events: std::env::var("EVENTS_PATH").unwrap_or_else(|_| "events.jsonl".into()),
         bars: std::env::var("BAR_STORE").unwrap_or_else(|_| "data/bars".into()),
         reports: std::env::var("REPORT_STORE").unwrap_or_else(|_| "data/reports".into()),
@@ -93,8 +94,15 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The newest run's results (every symbol), or an empty list before any run exists.
 async fn get_backtest(State(p): State<Paths>) -> Json<Vec<BacktestResult>> {
-    Json(read_jsonl(&p.backtest))
+    let latest = BacktestStore::new(&p.backtest)
+        .latest()
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "could not read backtest store");
+            None
+        });
+    Json(latest.map(|r| r.results).unwrap_or_default())
 }
 
 async fn get_events(State(p): State<Paths>) -> Json<Vec<EventRow>> {
