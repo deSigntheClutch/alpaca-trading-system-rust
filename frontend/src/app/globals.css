@@ -56,12 +56,6 @@ input[type='date'], input[type='number'], .chip-input {
 }
 .chip button:hover { color: #cf222e; }
 .chip-input { min-width: 190px; flex: 1; }
-.suggest { display: inline-flex; gap: 4px; }
-.suggest button {
-  border: 1px dashed #d0d0d0; background: #fff; color: #777; border-radius: 6px;
-  padding: 3px 8px; font-size: 12px; cursor: pointer;
-}
-.suggest button:hover { border-color: #2962ff; color: #2962ff; }
 
 .warn { color: #8a6100; font-size: 12px; }
 

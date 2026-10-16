@@ -17,8 +17,6 @@ const ARMS: { value: Arm; label: string; note: string }[] = [
   { value: 'llm+debate', label: 'LLM + debate', note: 'Adds bull and bear. Four calls per day.' },
 ]
 
-const SUGGESTED = ['BTC/USD', 'ETH/USD', 'NVDA', 'MU', 'AMD', 'SPY']
-
 type Props = {
   value: RunRequest
   onChange: (next: RunRequest) => void
@@ -169,8 +167,6 @@ function SymbolField({
     onChange([...symbols, s])
   }
 
-  const unused = SUGGESTED.filter((s) => !symbols.includes(s))
-
   return (
     <div className="symbols">
       {symbols.map((s) => (
@@ -200,15 +196,6 @@ function SymbolField({
           setDraft('')
         }}
       />
-      {unused.length > 0 && (
-        <span className="suggest">
-          {unused.slice(0, 4).map((s) => (
-            <button key={s} type="button" onClick={() => add(s)}>
-              + {s}
-            </button>
-          ))}
-        </span>
-      )}
     </div>
   )
 }
