@@ -36,6 +36,7 @@ itertools = "0.15.0"
 # config/universe.csv (domain/universe.rs)
 csv = "1"
 clap = { version = "4.6.7", features = ["derive"] }
+fin-primitives = { version = "4.0.1", default-features = false, features = ["indicators"] }
 
 [dev-dependencies]
 rust_decimal_macros = "1.40.0"
