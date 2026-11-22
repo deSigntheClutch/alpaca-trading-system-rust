@@ -36,27 +36,13 @@ fn sma(closes: &[f64], n: usize) -> Option<f64> {
     Some(tail.iter().sum::<f64>() / n as f64)
 }
 
-/// n-day RSI (simple-average variant): 0..100. None if not enough data.
+/// n-day RSI with Wilder smoothing (TA-Lib seeding): 0..100. None if not enough data.
 fn rsi(closes: &[f64], n: usize) -> Option<f64> {
     if closes.len() < n + 1 {
         return None;
     }
-    let changes: Vec<f64> = closes.windows(2).map(|w| w[1] - w[0]).collect();
-    let recent = &changes[changes.len() - n..];
-    let (mut gain, mut loss) = (0.0, 0.0);
-    for &c in recent {
-        if c >= 0.0 {
-            gain += c;
-        } else {
-            loss -= c;
-        }
-    }
-    let (avg_gain, avg_loss) = (gain / n as f64, loss / n as f64);
-    if avg_loss == 0.0 {
-        return Some(100.0); // all gains, no losses = max overbought
-    }
-    let rs = avg_gain / avg_loss;
-    Some(100.0 - 100.0 / (1.0 + rs))
+    let v = *fin_primitives::signals::batch_f64::rsi(closes, n).last()?;
+    v.is_finite().then_some(v)
 }
 
 /// Close series (chronological, >=20 bars) -> composite signal. None if too short.
@@ -110,6 +96,20 @@ mod tests {
         let s = compute(&closes).unwrap();
         assert!(s.score < 0.0, "score={}", s.score);
         assert!(matches!(s.rating, Rating::Sell | Rating::StrongSell));
+    }
+
+    #[test]
+    fn rsi_is_wilder_smoothed() {
+        // Wilder's 14-period RSI over this series (seed = mean of the first 14 changes,
+        // then avg = (prev * 13 + x) / 14) ends at 56.945932803034346.
+        // The old simple-average RSI read 47.40 here.
+        let closes = [
+            44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08, 45.89, 46.03,
+            45.61, 46.28, 46.28, 46.00, 46.03, 46.41, 46.22, 45.64, 46.21, 46.25, 45.71, 46.45,
+            45.78, 45.35, 44.03, 44.17, 45.01, 44.89, 45.43, 46.03,
+        ];
+        let r = rsi(&closes, 14).unwrap();
+        assert!((r - 56.945932803034346).abs() < 1e-6, "rsi={r}");
     }
 
     #[test]
